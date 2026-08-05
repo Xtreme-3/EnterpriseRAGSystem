@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# 环境变量（含密钥）
+.env
+
+# 运行时数据
+data/
+*.sqlite3
+*.db
+
+# 前端构建产物（阶段三）
+frontend/node_modules/
+frontend/dist/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

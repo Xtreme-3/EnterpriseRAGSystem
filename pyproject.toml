@@ -1,0 +1,29 @@
+[project]
+name = "enterprise-rag"
+version = "0.1.0"
+description = "企业级 RAG 系统：内部知识库语义检索与智能问答引擎"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
+    "openai>=1.40",
+    "chromadb>=0.5",
+    "python-docx>=1.1",
+    "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.111", "uvicorn>=0.30"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
