@@ -7,6 +7,10 @@
         <span>返回</span>
       </el-button>
       <span class="chat-kb-name">{{ kbName }}</span>
+      <el-radio-group v-model="mode" size="small" class="chat-mode">
+        <el-radio-button value="hybrid">混合</el-radio-button>
+        <el-radio-button value="vector">纯向量</el-radio-button>
+      </el-radio-group>
       <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
     </div>
 
@@ -96,6 +100,7 @@ const kbId = Number(route.params.kbId);
 
 const kbName = ref("加载中...");
 const input = ref("");
+const mode = ref("hybrid");
 const sending = ref(false);
 const errorMsg = ref("");
 const messages = ref<Message[]>([]);
@@ -147,7 +152,7 @@ async function send() {
   abortController = new AbortController();
 
   try {
-    const resp = await askStreamRequest(kbId, query, abortController.signal);
+    const resp = await askStreamRequest(kbId, query, abortController.signal, mode.value);
     const reader = resp.body!.getReader();
 
     for await (const event of parseSseStream(reader)) {

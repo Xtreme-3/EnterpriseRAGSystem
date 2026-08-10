@@ -40,7 +40,7 @@ A10 选 pgvector 时预留了「原生全文检索」这条路径（README 迭�
 | H1-3 | chroma 关键词兜底 | `search_lexical`（$contains 词频），离线自包含 |
 | H1-4 | 检索器 + API 接入 | `Retriever.retrieve` 按 `retrieval_mode` 走混合；inspect 返回 `mode` |
 
-> 前端切换开关（inspect/对话页可选 mode）留作后续子块，不阻塞后端落地。
+> 前端切换开关（inspect/对话页可选 mode）已在「前端 mode 切换」子块完成。
 
 ## 输入 / 输出
 
@@ -58,7 +58,9 @@ A10 选 pgvector 时预留了「原生全文检索」这条路径（README 迭�
 - [x] chroma `search_lexical`：含词切片按词频排序命中，空词返回 []
 - [x] `retrieval_mode="vector"` 时行为与 H1 之前完全一致（回归）
 - [x] inspect 接口返回 `mode`；空库/无命中仍 200 空列表
-- [x] `pytest` 全部通过（含新增 hybrid 测试）：**107 全绿**
+- [x] chat（ask/ask_stream）接口透传 `mode`，非法值 422
+- [x] 前端切换开关：inspect 质检台 + 对话页可切换 vector/hybrid（后端 `hybrid` 默认）
+- [x] `pytest` 全部通过（含新增 hybrid 测试）：**109 全绿**
 
 ## 依赖
 

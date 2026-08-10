@@ -21,6 +21,11 @@
         </el-input>
 
         <div class="query-controls">
+          <span class="control-label">检索模式</span>
+          <el-radio-group v-model="mode" size="small">
+            <el-radio-button value="hybrid">混合（向量+关键词）</el-radio-button>
+            <el-radio-button value="vector">纯向量</el-radio-button>
+          </el-radio-group>
           <span class="control-label">top_k</span>
           <el-slider
             v-model="topK"
@@ -50,7 +55,10 @@
 
     <!-- 命中列表 -->
     <div v-if="hits.length > 0" class="hits-list">
-      <div class="hits-summary">共 {{ hits.length }} 条命中</div>
+      <div class="hits-summary">
+        共 {{ hits.length }} 条命中
+        <span v-if="usedMode" class="hits-mode">· 检索模式：{{ usedMode }}</span>
+      </div>
       <div v-for="(hit, idx) in hits" :key="idx" class="hit-card">
         <div class="hit-rank">
           <span class="rank-num">#{{ idx + 1 }}</span>
@@ -98,6 +106,8 @@ const kbId = Number(route.params.kbId);
 const kbName = ref("");
 const query = ref("");
 const topK = ref(5);
+const mode = ref("hybrid");
+const usedMode = ref("");
 const hits = ref<InspectHit[]>([]);
 const ran = ref(false);
 const loading = ref(false);
@@ -133,8 +143,9 @@ async function runInspect() {
   }
   loading.value = true;
   try {
-    const result = await inspectApi.inspect(kbId, query.value.trim(), topK.value);
+    const result = await inspectApi.inspect(kbId, query.value.trim(), topK.value, mode.value);
     hits.value = result.hits;
+    usedMode.value = result.mode;
     ran.value = true;
   } catch (err: any) {
     ElMessage.error(err.response?.data?.detail || "检索失败");

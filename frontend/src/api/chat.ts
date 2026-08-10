@@ -34,7 +34,8 @@ export type SseEvent = SseToken | SseSources;
 export async function askStreamRequest(
   kbId: number,
   query: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mode: string = "hybrid"
 ): Promise<Response> {
   const auth = useAuthStore();
   const resp = await fetch(`/api/kbs/${kbId}/ask/stream`, {
@@ -43,7 +44,7 @@ export async function askStreamRequest(
       "Content-Type": "application/json",
       ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, mode }),
     signal,
   });
 
