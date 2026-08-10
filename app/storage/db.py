@@ -1,4 +1,7 @@
-"""SQLite 元数据库：engine / session 工厂与建表。"""
+"""元数据库：engine / session 工厂与建表。
+
+支持 SQLite（默认）和 PostgreSQL（pgvector 模式下一套库管元数据+向量）。
+"""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -12,15 +15,20 @@ from app.core.models import Base
 
 
 def init_db(settings: Settings | None = None) -> tuple[object, sessionmaker]:
-    """确保 data 目录与表存在，返回 (engine, session_factory)。"""
+    """确保 data 目录（SQLite）或数据库（PG）存在并建表，返回 (engine, session_factory)。"""
     s = settings or get_settings()
-    s.data_dir.mkdir(parents=True, exist_ok=True)
 
-    engine = create_engine(
-        s.sqlite_url,
-        # SQLite 多线程读取（FastAPI 阶段需要）
-        connect_args={"check_same_thread": False},
-    )
+    if s.vector_store == "pgvector":
+        # PostgreSQL 模式：元数据与向量共库
+        engine = create_engine(s.database_url)
+    else:
+        # SQLite 模式（默认）：本地文件持久化
+        s.data_dir.mkdir(parents=True, exist_ok=True)
+        engine = create_engine(
+            s.sqlite_url,
+            connect_args={"check_same_thread": False},
+        )
+
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     return engine, session_factory

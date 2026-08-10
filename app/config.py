@@ -36,8 +36,33 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 120
     top_k: int = 5
-    vector_store: str = "chroma"  # chroma | lancedb | sqlite-vec（预留）
+    # 余弦相似度命中阈值：低于此值的切片视为无关，不计入命中来源/日志统计
+    # （真实 embedding 对无关文本常有小正分，0 阈值会让噪声污染质检/溯源/问答日志）
+    similarity_threshold: float = 0.1
+    vector_store: str = "chroma"  # chroma | pgvector
+    # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索
+    retrieval_mode: str = "hybrid"
     data_dir: Path = ROOT_DIR / "data"
+
+    # ---- PostgreSQL（元数据 + 向量共库） ----
+    pg_host: str = "localhost"
+    pg_port: int = 5432
+    pg_user: str = "postgres"
+    pg_password: str = ""
+    pg_database: str = "ragdb"
+
+    # ---- 鉴权 ----
+    jwt_secret: str = "change-me-in-production"
+    jwt_expire_hours: int = 24
+
+    def model_post_init(self, _context) -> None:
+        """启动时校验：JWT secret 不能使用默认值（生产部署安全要求）。"""
+        if self.jwt_secret == "change-me-in-production":
+            import warnings
+            warnings.warn(
+                "JWT_SECRET 仍为默认值 'change-me-in-production'，生产部署请设置环境变量 JWT_SECRET",
+                stacklevel=2,
+            )
 
     # ---- 路径派生 ----
     @property
@@ -51,6 +76,14 @@ class Settings(BaseSettings):
     @property
     def sqlite_url(self) -> str:
         return f"sqlite:///{self.db_path.as_posix()}"
+
+    @property
+    def database_url(self) -> str:
+        """PostgreSQL DSN（psycopg2）。密码从 .env 读取，不进版本控制。"""
+        return (
+            f"postgresql://{self.pg_user}:{self.pg_password}"
+            f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        )
 
 
 def get_settings() -> Settings:

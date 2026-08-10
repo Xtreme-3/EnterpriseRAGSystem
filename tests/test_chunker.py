@@ -28,8 +28,11 @@ def test_chunk_size_bound() -> None:
     text = _long_text("公司为员工提供五险一金、补充商业医疗保险与每年一次的健康体检，福利内容详见员工手册福利章节。")
     chunks = split_text(text, CHUNK, OVERLAP)
     assert len(chunks) > 1
-    for chunk in chunks:
+    for chunk in chunks[:-1]:
         assert len(chunk) <= CHUNK
+    # 最后一块不截断，可能超过 CHUNK 但不超过 CHUNK + OVERLAP
+    assert len(chunks[-1]) <= CHUNK + OVERLAP
+    for chunk in chunks:
         assert chunk.strip()
 
 
@@ -62,6 +65,11 @@ def test_hard_split_very_long_word() -> None:
 @pytest.mark.parametrize("chunk_size", [50, 100, 300])
 def test_different_sizes(chunk_size: int) -> None:
     text = _long_text("信息安全制度要求员工不得将内部资料带离办公环境。")
-    chunks = split_text(text, chunk_size, chunk_size // 5)
+    overlap = chunk_size // 5
+    chunks = split_text(text, chunk_size, overlap)
     assert chunks
-    assert all(len(c) <= chunk_size for c in chunks)
+    # 除最后一块外，其余块 <= chunk_size；最后一块因为不截断以保留尾部内容，可能 <= chunk_size + overlap
+    for c in chunks[:-1]:
+        assert len(c) <= chunk_size
+    if len(chunks) > 1:
+        assert len(chunks[-1]) <= chunk_size + overlap

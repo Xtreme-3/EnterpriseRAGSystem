@@ -95,7 +95,11 @@ def _apply_overlap(chunks: list[str], chunk_size: int, overlap: int) -> list[str
             continue
         prev_tail = chunks[i - 1][-overlap:]
         merged = prev_tail + chunk
-        out.append(merged[:chunk_size] if len(merged) > chunk_size else merged)
+        if i == len(chunks) - 1:
+            # 最后一块不截断，避免尾部内容丢失
+            out.append(merged)
+        else:
+            out.append(merged[:chunk_size] if len(merged) > chunk_size else merged)
     return out
 
 

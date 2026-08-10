@@ -21,11 +21,23 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from app.config import get_settings
-from app.core.models import Document
+from app.core.models import Document, User
 from app.ingestion.pipeline import IngestionPipeline
 from app.rag.pipeline import RagPipeline
+from app.storage.db import get_db
 
 DEFAULT_QUESTION = "员工休病假超过三天需要提交什么材料？"
+
+
+def _ensure_demo_user(session_factory) -> int:
+    """确保存在 demo 用户（脚本用），返回 user_id。"""
+    with get_db(session_factory) as db:
+        user = db.query(User).filter(User.username == "_demo").first()
+        if user is None:
+            user = User(username="_demo", hashed_password="")
+            db.add(user)
+            db.flush()
+        return user.id
 
 
 def main() -> None:
@@ -36,7 +48,8 @@ def main() -> None:
     ingest = IngestionPipeline()
     rag = RagPipeline()
 
-    kb = ingest.get_or_create_kb("demo", "演示知识库")
+    user_id = _ensure_demo_user(ingest.session_factory)
+    kb = ingest.get_or_create_kb("demo", "演示知识库", user_id=user_id)
     print(f"知识库: kb#{kb.id}「{kb.name}」")
 
     sample = ROOT / "docs" / "sample.md"

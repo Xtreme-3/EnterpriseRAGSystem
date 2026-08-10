@@ -38,22 +38,22 @@ class IngestionPipeline:
 
     # ---- 知识库 ----
 
-    def create_kb(self, name: str, description: str = "") -> KnowledgeBase:
+    def create_kb(self, name: str, description: str = "", user_id: int = 0) -> KnowledgeBase:
         with get_db(self.session_factory) as db:
-            kb = KnowledgeBase(name=name, description=description)
+            kb = KnowledgeBase(name=name, description=description, user_id=user_id)
             db.add(kb)
             db.flush()
             kb_id = kb.id
         self.vector_store.ensure_collection(kb_id, self.embedding.dim)
         return kb
 
-    def get_or_create_kb(self, name: str, description: str = "") -> KnowledgeBase:
+    def get_or_create_kb(self, name: str, description: str = "", user_id: int = 0) -> KnowledgeBase:
         """按名称取已有知识库，不存在则创建（幂等）。"""
         with get_db(self.session_factory) as db:
             kb = db.query(KnowledgeBase).filter(KnowledgeBase.name == name).first()
             if kb is not None:
                 return kb
-        return self.create_kb(name, description)
+        return self.create_kb(name, description, user_id=user_id)
 
     def delete_kb(self, kb_id: int) -> None:
         self.vector_store.delete_collection(kb_id)
@@ -64,10 +64,14 @@ class IngestionPipeline:
 
     # ---- 文档 ----
 
-    def ingest_file(self, kb_id: int, path: str | Path) -> Document:
-        """同步摄取单个文件：解析、切片、向量化、入库。"""
+    def ingest_file(self, kb_id: int, path: str | Path, display_name: str | None = None) -> Document:
+        """同步摄取单个文件：解析、切片、向量化、入库。
+
+        display_name: 展示文件名（用于临时文件场景，保留原始文件名）。
+        """
         p = Path(path)
         ext = p.suffix.lower().lstrip(".")
+        filename = display_name or p.name
 
         # 1. 解析 + 切片 + 向量化
         try:
@@ -81,11 +85,11 @@ class IngestionPipeline:
                 raise ValueError("文档解析后无有效内容")
             vectors = self.embedding.embed(chunks)
         except Exception as exc:
-            return self._fail(kb_id, p, ext, exc)
+            return self._fail(kb_id, filename, ext, exc)
 
         # 2. 写元数据（先 processing，向量写成功后置 indexed）
         with get_db(self.session_factory) as db:
-            doc = Document(kb_id=kb_id, filename=p.name, file_type=ext, status="processing")
+            doc = Document(kb_id=kb_id, filename=filename, file_type=ext, status="processing")
             db.add(doc)
             db.flush()
             for i, content in enumerate(chunks):
@@ -110,7 +114,7 @@ class IngestionPipeline:
                 ],
             )
         except Exception as exc:
-            return self._fail(kb_id, p, ext, exc, doc_id=doc_id)
+            return self._fail(kb_id, filename, ext, exc, doc_id=doc_id)
 
         # 4. 标记完成
         with get_db(self.session_factory) as db:
@@ -131,7 +135,7 @@ class IngestionPipeline:
             if doc is not None:
                 db.delete(doc)
 
-    def _fail(self, kb_id: int, p: Path, ext: str, exc: Exception, doc_id: int | None = None) -> Document:
+    def _fail(self, kb_id: int, filename: str, ext: str, exc: Exception, doc_id: int | None = None) -> Document:
         """摄取失败：若已有 processing 记录则置为 failed，否则新建 failed 记录。"""
         with get_db(self.session_factory) as db:
             if doc_id is not None:
@@ -142,7 +146,7 @@ class IngestionPipeline:
                     return doc
             doc = Document(
                 kb_id=kb_id,
-                filename=p.name,
+                filename=filename,
                 file_type=ext,
                 status="failed",
                 error=str(exc),

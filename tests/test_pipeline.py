@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
-from app.core.models import Document
+from app.core.models import Document, User
 from app.ingestion.pipeline import IngestionPipeline
 from app.providers.factory import build_embedding, build_llm, build_reranker
 from app.rag.pipeline import RagPipeline
@@ -30,15 +30,26 @@ DOC_TEXT = """# 测试知识库
 
 @pytest.fixture()
 def env(tmp_path: Path) -> tuple[Settings, sessionmaker, IngestionPipeline, RagPipeline]:
-    """隔离环境：mock 供应商 + 临时 data 目录。"""
+    """隔离环境：mock 供应商 + 临时 data 目录 + 默认用户。"""
     settings = Settings(
         rag_provider="mock",
         data_dir=tmp_path / "data",
         chunk_size=200,
         chunk_overlap=20,
         top_k=3,
+        vector_store="chroma",
     )
     _, session_factory = init_db(settings)
+
+    # 创建默认用户（KnowledgeBase 需要 user_id 外键）
+    with session_factory() as db:
+        user = db.query(User).filter(User.username == "_pipeline_test").first()
+        if user is None:
+            user = User(username="_pipeline_test", hashed_password="")
+            db.add(user)
+            db.flush()
+        user_id = user.id
+
     vector_store = build_vector_store(settings)
     embedding = build_embedding(settings)
     llm = build_llm(settings)
@@ -58,7 +69,7 @@ def env(tmp_path: Path) -> tuple[Settings, sessionmaker, IngestionPipeline, RagP
         llm=llm,
         reranker=reranker,
     )
-    return settings, session_factory, ingest, rag
+    return settings, session_factory, ingest, rag, user_id
 
 
 def _write_doc(tmp_path: Path) -> Path:
@@ -68,8 +79,8 @@ def _write_doc(tmp_path: Path) -> Path:
 
 
 def test_full_chain_mock(env, tmp_path: Path) -> None:
-    settings, session_factory, ingest, rag = env
-    kb = ingest.create_kb("测试库")
+    settings, session_factory, ingest, rag, user_id = env
+    kb = ingest.create_kb("测试库", user_id=user_id)
     assert kb.id is not None
 
     path = _write_doc(tmp_path)
@@ -93,16 +104,16 @@ def test_full_chain_mock(env, tmp_path: Path) -> None:
 
 
 def test_query_empty_kb(env) -> None:
-    _, _, ingest, rag = env
-    kb = ingest.create_kb("空库")
+    _, _, ingest, rag, user_id = env
+    kb = ingest.create_kb("空库", user_id=user_id)
     result = rag.ask(kb.id, "随便问什么")
     assert "未找到" in result.answer
     assert result.sources == []
 
 
 def test_document_metadata_persisted(env, tmp_path: Path) -> None:
-    _, session_factory, ingest, _ = env
-    kb = ingest.create_kb("元数据库")
+    _, session_factory, ingest, _, user_id = env
+    kb = ingest.create_kb("元数据库", user_id=user_id)
     ingest.ingest_file(kb.id, _write_doc(tmp_path))
 
     with session_factory() as db:
@@ -110,3 +121,13 @@ def test_document_metadata_persisted(env, tmp_path: Path) -> None:
         assert len(docs) == 1
         assert docs[0].status == "indexed"
         assert docs[0].chunk_count == docs[0].chunks.__len__()
+
+
+def test_chroma_document_counts(env, tmp_path: Path) -> None:
+    """chroma document_counts 与元数据 chunk_count 一致（G3 smoke）。"""
+    _, _, ingest, rag, user_id = env
+    kb = ingest.create_kb("chroma计数", user_id=user_id)
+    doc = ingest.ingest_file(kb.id, _write_doc(tmp_path))
+    counts = rag.retriever.vector_store.document_counts(kb.id)
+    assert counts.get(doc.id) == doc.chunk_count
+    assert counts[doc.id] > 0
