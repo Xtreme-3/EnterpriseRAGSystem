@@ -65,9 +65,9 @@ class RagPipeline:
         self.reranker = Reranker(reranker or build_reranker(self.settings))
         self.generator = Generator(llm or build_llm(self.settings))
 
-    def ask(self, kb_id: int, query: str, top_k: int | None = None) -> RagAnswer:
+    def ask(self, kb_id: int, query: str, top_k: int | None = None, mode: str | None = None) -> RagAnswer:
         k = top_k or self.settings.top_k
-        hits = self.retriever.retrieve(kb_id, query, k)
+        hits = self.retriever.retrieve(kb_id, query, k, mode=mode)
         hits = self.reranker.rerank(query, hits, top_n=k)
         answer = self.generator.generate(query, hits)
         sources = [

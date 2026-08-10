@@ -157,3 +157,28 @@ def test_ask_stream(client: TestClient) -> None:
     assert len(tokens) > 0
     assert sources_seen
     assert done_seen
+
+
+# ---- H1：chat 检索模式（mode）----
+
+
+def test_ask_explicit_mode_vector(client: TestClient) -> None:
+    """显式传 mode=vector 走纯向量检索，链路正常。"""
+    token = _register_and_login(client, "test_h1_mode_vec")
+    kb_id = _create_kb(client, token, "test_h1_mode_vec_kb")
+    _upload(client, kb_id, token, "policy.txt", "出差住宿标准：一线城市每晚不超过六百元。".encode("utf-8"))
+
+    resp = client.post(f"/api/kbs/{kb_id}/ask", json={"query": "住宿标准", "mode": "vector"},
+                       headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json()["sources"][0]["filename"] == "policy.txt"
+
+
+def test_ask_invalid_mode_422(client: TestClient) -> None:
+    """非法 mode 值被 pydantic 校验拒绝（422）。"""
+    token = _register_and_login(client, "test_h1_mode_bad")
+    kb_id = _create_kb(client, token, "test_h1_mode_bad_kb")
+
+    resp = client.post(f"/api/kbs/{kb_id}/ask", json={"query": "test", "mode": "foo"},
+                       headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 422

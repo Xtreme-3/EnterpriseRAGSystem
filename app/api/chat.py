@@ -12,7 +12,7 @@ from typing import Generator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -30,6 +30,16 @@ router = APIRouter(prefix="/api/kbs", tags=["chat"])
 
 class AskRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
+    mode: str | None = Field(
+        default=None, description="检索模式：vector | hybrid；不传用服务端配置默认"
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("vector", "hybrid"):
+            raise ValueError("mode 必须是 vector 或 hybrid")
+        return v
 
 
 class SourceRefOut(BaseModel):
@@ -127,7 +137,7 @@ def ask(
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query)
+        result = rag.ask(kb_id, req.query, mode=req.mode)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
@@ -156,7 +166,7 @@ def ask_stream(
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query)
+        result = rag.ask(kb_id, req.query, mode=req.mode)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
