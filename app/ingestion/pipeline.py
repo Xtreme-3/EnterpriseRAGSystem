@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings, get_settings
 from app.core.models import Chunk, Document, KnowledgeBase
-from app.ingestion.chunker import split_text
+from app.ingestion.chunker import split_semantic, split_structure, split_text
 from app.ingestion.parsers import parse_file
 from app.providers.base import EmbeddingProvider
 from app.storage.db import get_db
@@ -76,11 +76,7 @@ class IngestionPipeline:
         # 1. 解析 + 切片 + 向量化
         try:
             text = parse_file(p)
-            chunks = split_text(
-                text,
-                chunk_size=self.settings.chunk_size,
-                chunk_overlap=self.settings.chunk_overlap,
-            )
+            chunks = self._chunk(text)
             if not chunks:
                 raise ValueError("文档解析后无有效内容")
             vectors = self.embedding.embed(chunks)
@@ -134,6 +130,23 @@ class IngestionPipeline:
             doc = db.get(Document, document_id)
             if doc is not None:
                 db.delete(doc)
+
+    def _chunk(self, text: str) -> list[str]:
+        """按 Settings.chunk_strategy 选择切分策略（H2 语义切分）。"""
+        size = self.settings.chunk_size
+        overlap = self.settings.chunk_overlap
+        strategy = self.settings.chunk_strategy
+        if strategy == "structure":
+            return split_structure(text, chunk_size=size, chunk_overlap=overlap)
+        if strategy == "structure+semantic":
+            return split_semantic(
+                text,
+                self.embedding.embed,
+                threshold=self.settings.semantic_break_threshold,
+                chunk_size=size,
+                chunk_overlap=overlap,
+            )
+        return split_text(text, chunk_size=size, chunk_overlap=overlap)
 
     def _fail(self, kb_id: int, filename: str, ext: str, exc: Exception, doc_id: int | None = None) -> Document:
         """摄取失败：若已有 processing 记录则置为 failed，否则新建 failed 记录。"""

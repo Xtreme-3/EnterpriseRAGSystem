@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（app/config.py 的上上级）
@@ -42,6 +43,11 @@ class Settings(BaseSettings):
     vector_store: str = "chroma"  # chroma | pgvector
     # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索
     retrieval_mode: str = "hybrid"
+    # 切块策略（H2 语义切分）：fixed（定长递归，默认，回归兜底）| structure（结构优先语义切分）
+    # | structure+semantic（结构 + 句级 embedding 微调，需真实 embedding 才有意义）
+    chunk_strategy: str = "fixed"
+    # structure+semantic 用：相邻句子 embedding 余弦相似度低于此值视为主题断层，在断层处切块
+    semantic_break_threshold: float = 0.65
     data_dir: Path = ROOT_DIR / "data"
 
     # ---- PostgreSQL（元数据 + 向量共库） ----
@@ -54,6 +60,13 @@ class Settings(BaseSettings):
     # ---- 鉴权 ----
     jwt_secret: str = "change-me-in-production"
     jwt_expire_hours: int = 24
+
+    @field_validator("chunk_strategy")
+    @classmethod
+    def _validate_chunk_strategy(cls, v: str) -> str:
+        if v not in ("fixed", "structure", "structure+semantic"):
+            raise ValueError("chunk_strategy 必须是 fixed | structure | structure+semantic")
+        return v
 
     def model_post_init(self, _context) -> None:
         """启动时校验：JWT secret 不能使用默认值（生产部署安全要求）。"""
