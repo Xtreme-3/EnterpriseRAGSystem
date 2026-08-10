@@ -1,0 +1,48 @@
+/* 全局样式：品牌色 / 字体 / 圆角分层（前端去 AI 味改造）
+ *
+ * 设计依据：docs/design-guide.md（原始方案）+ docs/design-assessment.md（项目适配）
+ * - 品牌色：墨绿 #0f6e56（非 AI 默认紫蓝），覆盖 Element Plus 变量
+ * - 字体：标题衬线 + 正文无衬线（裁剪版：仅标题用衬线）
+ * - 圆角分层：容器 12px > 卡片 8px > 按钮 4px
+ */
+
+:root {
+  /* ---- 品牌色：墨绿 ---- */
+  --el-color-primary: #0f6e56;
+  --el-color-primary-light-3: #579a89;
+  --el-color-primary-light-5: #87b7ab;
+  --el-color-primary-light-7: #b7d4cc;
+  --el-color-primary-light-8: #cfe2dd;
+  --el-color-primary-light-9: #e7f1ee;
+  --el-color-primary-dark-2: #0c5845;
+
+  --app-bg: #f5f7fa;
+
+  /* ---- 圆角分层 ---- */
+  --radius-container: 12px;
+  --radius-card: 8px;
+  --radius-button: 4px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", Arial, sans-serif;
+  background: var(--app-bg);
+  color: #303133;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 标题用衬线（宋体系），与正文无衬线形成层次，去 AI 味 */
+h1, h2, h3, h4 {
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", "STSong", serif;
+}
