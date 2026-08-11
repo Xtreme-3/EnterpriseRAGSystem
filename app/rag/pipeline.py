@@ -1,4 +1,4 @@
-"""RAG 编排：query → retrieve → rerank → generate → 结构化答案 + 引用来源。"""
+"""RAG 编排：query → (rewrite) → retrieve → rerank → generate → 结构化答案 + 引用来源。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +9,7 @@ from app.config import Settings, get_settings
 from app.core.models import Document
 from app.providers.base import EmbeddingProvider, LLMProvider, RerankProvider
 from app.rag.generator import Generator
+from app.rag.query_rewriter import QueryRewriter, build_rewriter
 from app.rag.reranker import Reranker
 from app.rag.retriever import Retriever
 from app.storage.db import get_db
@@ -31,6 +32,8 @@ class RagAnswer:
     query: str
     answer: str
     sources: list[SourceRef]
+    # J1 多轮：改写后的检索词（无历史/未改写时为原始 query；调试与测试用）
+    rewritten_query: str = ""
 
 
 class RagPipeline:
@@ -63,13 +66,29 @@ class RagPipeline:
             self.settings,
         )
         self.reranker = Reranker(reranker or build_reranker(self.settings))
-        self.generator = Generator(llm or build_llm(self.settings))
+        self.llm = llm or build_llm(self.settings)
+        # J1 多轮：查询改写（mock 默认规则策略，配真模型自动升级 LLM 改写）
+        self.rewriter: QueryRewriter = build_rewriter(self.settings, self.llm)
+        self.generator = Generator(self.llm)
 
-    def ask(self, kb_id: int, query: str, top_k: int | None = None, mode: str | None = None) -> RagAnswer:
+    def ask(
+        self,
+        kb_id: int,
+        query: str,
+        top_k: int | None = None,
+        mode: str | None = None,
+        history: list | None = None,
+    ) -> RagAnswer:
+        """多轮问答：历史非空时先改写查询（只影响检索），答案 prompt 仍用原始 query。
+
+        ``history``：含 role/content 的最近轮次；None/空 = 单轮，行为与之前完全一致。
+        """
         k = top_k or self.settings.top_k
-        hits = self.retriever.retrieve(kb_id, query, k, mode=mode)
-        hits = self.reranker.rerank(query, hits, top_n=k)
-        answer = self.generator.generate(query, hits)
+        # 检索用改写问句（消解指代），生成用原始问句（保留用户原意）
+        search_query = self.rewriter.rewrite(query, history)
+        hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
+        hits = self.reranker.rerank(search_query, hits, top_n=k)
+        answer = self.generator.generate(query, hits, history=history)
         sources = [
             SourceRef(
                 document_id=c.document_id,
@@ -81,7 +100,7 @@ class RagPipeline:
             for c in hits
         ]
         self._attach_filenames(sources)
-        return RagAnswer(query=query, answer=answer, sources=sources)
+        return RagAnswer(query=query, answer=answer, sources=sources, rewritten_query=search_query)
 
     def _attach_filenames(self, sources: list[SourceRef]) -> None:
         doc_ids = {s.document_id for s in sources}

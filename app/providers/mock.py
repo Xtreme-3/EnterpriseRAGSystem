@@ -125,8 +125,14 @@ class MockLLM(LLMProvider):
         query_match = re.search(r"【用户问题】\s*\n(.+)", prompt)
         query = query_match.group(1).strip() if query_match else ""
 
-        # 提取【资料】部分的所有 [N] 块
+        # 只截取【资料】…【用户问题】之间的内容解析 [N] 块：
+        # J1 在【资料】前新增了【对话历史】块，若历史文本含 "[数字]" 不会污染块解析。
+        region = prompt
+        m = re.search(r"【资料】(.*?)【用户问题】", prompt, re.DOTALL)
+        if m:
+            region = m.group(1)
+
         blocks: list[str] = []
-        for m in re.finditer(r"\[\d+\]\s*(.+?)(?=\[\d+\]|\n【|$)", prompt, re.DOTALL):
-            blocks.append(m.group(1).strip())
+        for fm in re.finditer(r"\[\d+\]\s*(.+?)(?=\[\d+\]|$)", region, re.DOTALL):
+            blocks.append(fm.group(1).strip())
         return query, blocks

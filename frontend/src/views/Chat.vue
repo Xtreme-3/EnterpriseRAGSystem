@@ -84,7 +84,7 @@ import { ref, nextTick, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { ArrowLeft } from "@element-plus/icons-vue";
-import { askStreamRequest, parseSseStream, type SourceRef } from "@/api/chat";
+import { askStreamRequest, parseSseStream, type ChatTurn, type SourceRef } from "@/api/chat";
 import { kbApi } from "@/api/kbs";
 
 interface Message {
@@ -132,12 +132,24 @@ function onEnter(e: KeyboardEvent) {
   send();
 }
 
+// J1 多轮：取最近 6 轮（user+assistant 成对，按消息条数 ×2）作为 history，
+// 只带文本、排除流式中的消息，当前问句由 query 单独发送
+const HISTORY_TURNS = 6;
+
+function buildHistory(): ChatTurn[] {
+  return messages.value
+    .filter((m) => !m.streaming && m.content.trim())
+    .slice(-HISTORY_TURNS * 2)
+    .map((m) => ({ role: m.role, content: m.content }));
+}
+
 async function send() {
   const query = input.value.trim();
   if (!query || sending.value) return;
 
   input.value = "";
   errorMsg.value = "";
+  const history = buildHistory(); // 当前问句入列前快照，作为上文
 
   // 添加用户消息
   messages.value.push({ role: "user", content: query, sources: [], streaming: false });
@@ -152,7 +164,7 @@ async function send() {
   abortController = new AbortController();
 
   try {
-    const resp = await askStreamRequest(kbId, query, abortController.signal, mode.value);
+    const resp = await askStreamRequest(kbId, query, abortController.signal, mode.value, history);
     const reader = resp.body!.getReader();
 
     for await (const event of parseSseStream(reader)) {

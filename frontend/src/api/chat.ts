@@ -8,10 +8,17 @@ export interface SourceRef {
   score: number;
 }
 
+/** J1 多轮：一轮对话历史 */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface AskResponse {
   query: string;
   answer: string;
   sources: SourceRef[];
+  rewritten_query: string;
 }
 
 export interface SseToken {
@@ -22,6 +29,7 @@ export interface SseToken {
 export interface SseSources {
   type: "sources";
   sources: SourceRef[];
+  rewritten_query?: string;
 }
 
 export type SseEvent = SseToken | SseSources;
@@ -30,12 +38,14 @@ export type SseEvent = SseToken | SseSources;
  * SSE 流式问答：返回 ReadableStream，调用方自行解析。
  * V1 客户端分片效果等同于 LLM 流式输出。
  * 支持 AbortSignal 用于组件卸载时取消请求。
+ * J1：history 携带最近对话轮次（前端只带文本，不带来源）。
  */
 export async function askStreamRequest(
   kbId: number,
   query: string,
   signal?: AbortSignal,
-  mode: string = "hybrid"
+  mode: string = "hybrid",
+  history: ChatTurn[] = []
 ): Promise<Response> {
   const auth = useAuthStore();
   const resp = await fetch(`/api/kbs/${kbId}/ask/stream`, {
@@ -44,7 +54,7 @@ export async function askStreamRequest(
       "Content-Type": "application/json",
       ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
     },
-    body: JSON.stringify({ query, mode }),
+    body: JSON.stringify({ query, mode, history }),
     signal,
   });
 

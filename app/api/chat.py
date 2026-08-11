@@ -28,10 +28,28 @@ router = APIRouter(prefix="/api/kbs", tags=["chat"])
 
 # ---- schemas ----
 
+class ChatTurn(BaseModel):
+    """J1 多轮：一轮对话历史（只保留文本，不带引用来源）。"""
+    role: str
+    content: str = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("role")
+    @classmethod
+    def _validate_role(cls, v: str) -> str:
+        if v not in ("user", "assistant"):
+            raise ValueError("role 必须是 user 或 assistant")
+        return v
+
+
 class AskRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     mode: str | None = Field(
         default=None, description="检索模式：vector | hybrid；不传用服务端配置默认"
+    )
+    history: list[ChatTurn] = Field(
+        default_factory=list,
+        max_length=20,
+        description="J1 多轮：最近对话轮次（最多 20 条），用于查询改写与上下文",
     )
 
     @field_validator("mode")
@@ -53,6 +71,9 @@ class AskResponse(BaseModel):
     query: str
     answer: str
     sources: list[SourceRefOut]
+    rewritten_query: str = Field(
+        default="", description="J1 多轮：改写后的检索问句（无历史/未改写时为原始 query）"
+    )
 
 
 class QaLogOut(BaseModel):
@@ -132,12 +153,12 @@ def ask(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> AskResponse:
-    """向知识库提问，返回完整答案与引用来源。"""
+    """向知识库提问，返回完整答案与引用来源。J1：可选携带 history 走多轮改写。"""
     _get_user_kb_or_403(db, kb_id, current_user)
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query, mode=req.mode)
+        result = rag.ask(kb_id, req.query, mode=req.mode, history=req.history or None)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
@@ -147,6 +168,7 @@ def ask(
         query=result.query,
         answer=result.answer,
         sources=_to_sources(result.sources),
+        rewritten_query=result.rewritten_query,
     )
 
 
@@ -166,7 +188,7 @@ def ask_stream(
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query, mode=req.mode)
+        result = rag.ask(kb_id, req.query, mode=req.mode, history=req.history or None)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
@@ -180,7 +202,7 @@ def ask_stream(
             token = result.answer[i : i + chunk_size]
             yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
 
-        # 推送来源
+        # 推送来源（含改写问句，便于多轮调试）
         sources_data = [
             {
                 "filename": s.filename,
@@ -190,7 +212,7 @@ def ask_stream(
             }
             for s in result.sources
         ]
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data, 'rewritten_query': result.rewritten_query}, ensure_ascii=False)}\n\n"
 
         # 结束
         yield "data: [DONE]\n\n"
