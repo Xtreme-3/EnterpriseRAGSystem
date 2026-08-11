@@ -6,6 +6,8 @@
       </div>
       <div class="header-right">
         <span class="header-user">{{ authStore.username }}</span>
+        <!-- I2 RBAC：全局角色徽章（admin） -->
+        <el-tag v-if="authStore.isAdmin" type="danger" size="small" effect="dark">管理员</el-tag>
         <el-button text @click="handleLogout">退出</el-button>
       </div>
     </header>
@@ -16,12 +18,20 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useAuthStore } from "@/stores/auth";
 
 const router = useRouter();
 const authStore = useAuthStore();
+
+// I2 RBAC：页面刷新后从 /me 恢复全局角色
+onMounted(() => {
+  if (authStore.isLoggedIn) {
+    authStore.refreshMe();
+  }
+});
 
 function handleLogout() {
   authStore.logout();

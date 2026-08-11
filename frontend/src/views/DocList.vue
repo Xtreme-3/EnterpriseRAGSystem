@@ -14,10 +14,13 @@
       </div>
       <div class="docs-toolbar-right">
         <el-button @click="goChat">💬 开始对话</el-button>
-        <el-button type="primary" @click="handleUploadClick">
+        <!-- I2 RBAC：仅 editor+ 可上传 -->
+        <el-button v-if="canEdit" type="primary" @click="handleUploadClick">
           <el-icon><Upload /></el-icon>
           上传文档
         </el-button>
+        <!-- I2 RBAC：只读提示 -->
+        <el-tag v-else type="info" effect="plain" size="small">只读 · 无上传权限</el-tag>
       </div>
     </div>
 
@@ -54,11 +57,13 @@
       </el-table-column>
       <el-table-column label="操作" width="100" align="center">
         <template #default="{ row }">
-          <el-popconfirm title="删除后不可恢复，确定删除？" @confirm="handleDelete(row.id)">
+          <!-- I2 RBAC：仅 editor+ 可删除 -->
+          <el-popconfirm v-if="canEdit" title="删除后不可恢复，确定删除？" @confirm="handleDelete(row.id)">
             <template #reference>
               <el-button text type="danger" size="small">删除</el-button>
             </template>
           </el-popconfirm>
+          <span v-else>—</span>
         </template>
       </el-table-column>
     </el-table>
@@ -95,12 +100,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, type UploadFile, type UploadInstance } from "element-plus";
 import { Upload, UploadFilled, Loading, ArrowLeft } from "@element-plus/icons-vue";
 import { docApi, type DocItem } from "@/api/docs";
-import { kbApi } from "@/api/kbs";
+import { kbApi, type KBItem } from "@/api/kbs";
 
 const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
 
@@ -120,6 +125,10 @@ const showUpload = ref(false);
 const uploading = ref(false);
 const uploadRef = ref<UploadInstance>();
 const pendingFile = ref<File | null>(null);
+
+// I2 RBAC：当前用户对此库的角色（owner | editor | viewer；admin 后端返回 owner）
+const myRole = ref<string>("viewer");
+const canEdit = computed(() => myRole.value === "owner" || myRole.value === "editor");
 
 const acceptExts = SUPPORTED_EXTS.join(",");
 
@@ -181,6 +190,8 @@ async function init() {
     const list = await kbApi.list();
     const kb = list.find((k) => k.id === kbId);
     kbName.value = kb?.name || `知识库 #${kbId}`;
+    // I2 RBAC：记录当前用户在该库的角色，用于按钮门控
+    myRole.value = kb?.role || "viewer";
   } catch {
     kbName.value = `知识库 #${kbId}`;
   }

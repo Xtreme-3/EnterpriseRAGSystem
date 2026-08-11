@@ -30,6 +30,16 @@ def init_db(settings: Settings | None = None) -> tuple[object, sessionmaker]:
         )
 
     Base.metadata.create_all(engine)
+
+    # I2 RBAC：老 PG 库 users 表补 role 列（幂等；create_all 不会 ALTER 已存在的表，
+    # 新表 knowledge_base_members 由 create_all 自动建）。SQLite 测试用全新库，天然包含。
+    if s.vector_store == "pgvector":
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "role VARCHAR(20) NOT NULL DEFAULT 'user'"
+            )
+
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     return engine, session_factory
 

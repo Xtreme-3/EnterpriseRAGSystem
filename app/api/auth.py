@@ -49,6 +49,7 @@ class UserResponse(BaseModel):
 
     id: int
     username: str
+    role: str  # I2 RBAC：user | admin
     created_at: datetime
 
 

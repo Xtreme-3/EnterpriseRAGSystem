@@ -13,6 +13,8 @@ export interface AuthResponse {
 export interface UserInfo {
   id: number;
   username: string;
+  /** 全局角色：user | admin */
+  role: string;
   created_at: string;
 }
 

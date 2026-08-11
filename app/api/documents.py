@@ -74,10 +74,10 @@ def upload_document(
 ) -> Document:
     """上传文档到知识库，同步完成向量化。
 
-    支持 PDF / DOCX / MD / TXT，最大 20 MB。
+    支持 PDF / DOCX / MD / TXT，最大 20 MB。需要 editor 及以上角色。
     """
-    # 1. 权限校验
-    _get_user_kb_or_403(db, kb_id, current_user)
+    # 1. 权限校验（I2 RBAC：上传文档 = 写操作，editor+）
+    _get_user_kb_or_403(db, kb_id, current_user, required="editor")
 
     # 2. 文件校验
     if not file.filename:
@@ -165,11 +165,11 @@ def delete_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    """删除文档（级联删除切片 + 向量数据）。"""
+    """删除文档（级联删除切片 + 向量数据）。需要 editor 及以上角色。"""
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if doc is None:
         raise HTTPException(status_code=404, detail="文档不存在")
-    _get_user_kb_or_403(db, doc.kb_id, current_user)
+    _get_user_kb_or_403(db, doc.kb_id, current_user, required="editor")
 
     # 清理向量 + 元数据（pipeline 内部处理）
     try:

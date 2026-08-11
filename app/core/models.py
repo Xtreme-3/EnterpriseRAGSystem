@@ -7,7 +7,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -80,6 +87,31 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
+    # 全局角色（I2 RBAC）：user | admin（admin 视为任意知识库的 owner）
+    role: Mapped[str] = mapped_column(String(20), default="user", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeBaseMember(Base):
+    """知识库协作成员与角色（I2 RBAC）。
+
+    owner 不入本表（owner = KnowledgeBase.user_id，权威来源）；本表只存
+    editor / viewer 协作成员。唯一约束 (kb_id, user_id) 防重复。
+    """
+
+    __tablename__ = "knowledge_base_members"
+    __table_args__ = (
+        UniqueConstraint("kb_id", "user_id", name="uq_kb_member"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kb_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), default="viewer")  # editor | viewer
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

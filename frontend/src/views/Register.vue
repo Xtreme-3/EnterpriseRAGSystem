@@ -105,6 +105,7 @@ async function handleRegister() {
       password: form.password,
     });
     authStore.setAuth(loginRes.access_token, form.username.trim());
+    await authStore.refreshMe(); // I2 RBAC：同步全局角色
     ElMessage.success("注册成功");
     router.push("/kbs");
   } catch (err: any) {
