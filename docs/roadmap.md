@@ -81,5 +81,6 @@
 | **I1** | **重排序 Rerank**（`RerankProvider` 接口 + Noop/Mock/OpenAICompat(gte-rerank) 三实现；`RERANK` 配置；质检台重排开关 + 检索/重排前后分数对比） | ✅ |
 | **I2** | **RBAC 权限**（`User.role` + `KnowledgeBaseMember` 表；角色 owner/editor/viewer + admin 全局旁路；写接口按角色收紧；成员管理 API + 前端角色徽章/按钮门控/成员对话框） | ✅ |
 | **J1** | **多轮对话**（`QueryRewriter` 规则/LLM 双策略：短追问/指代拼最近问句，mock 离线可测，配真模型自动升级 LLM 改写；`AskRequest.history` + 生成 prompt【对话历史】块；前端携带最近 6 轮） | ✅ |
+| **J2** | **会话持久化**（`Conversation`/`ChatMessage` 表 + 会话 CRUD；`ask/ask_stream` 带 `conversation_id` → 服务端从库内历史改写 + 落库本轮消息；标题首轮取提问前 30 字；前端会话侧边栏列表/新对话/删除 + 首次发送自动建会话；无 conversation_id 保持 J1 向后兼容） | ✅ |
 
 暂不拆块，等 V1 全部完成再排期。级别按 README「迭代路线图」：RBAC 权限、混合检索、Rerank、多轮对话、点赞/反馈日志、数据看板、管理后台（用户管理/系统配置/审计日志查询）、文档增量更新、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成（Playwright 浏览器自动化 + RAG 智能决策）。

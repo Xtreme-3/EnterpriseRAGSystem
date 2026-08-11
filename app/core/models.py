@@ -135,3 +135,48 @@ class QaLog(Base):
     hit_doc_ids: Mapped[str] = mapped_column(Text, default="[]")  # JSON 数组
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Conversation(Base):
+    """会话（J2 会话持久化）：一个知识库下的一次多轮对话，属某个用户私有。
+
+    随知识库级联删除；会话删除级联删除其消息（cascade=all, delete-orphan）。
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kb_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), default="新对话")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan", order_by="ChatMessage.id"
+    )
+
+
+class ChatMessage(Base):
+    """会话内一条消息（J2）：role=user|assistant，assistant 消息存 sources（JSON）。
+
+    会话级联删除；随知识库级联删除。
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    sources: Mapped[str] = mapped_column(Text, default="[]")  # JSON：assistant 引用来源
+    rewritten_query: Mapped[str] = mapped_column(String(1000), default="")  # assistant 改写词
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")

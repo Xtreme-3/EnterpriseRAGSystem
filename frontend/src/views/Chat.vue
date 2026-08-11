@@ -1,80 +1,114 @@
 <template>
   <div class="chat-page">
-    <!-- 头部 -->
-    <div class="chat-header">
-      <el-button class="back-btn" @click="goBack">
-        <el-icon><ArrowLeft /></el-icon>
-        <span>返回</span>
-      </el-button>
-      <span class="chat-kb-name">{{ kbName }}</span>
-      <el-radio-group v-model="mode" size="small" class="chat-mode">
-        <el-radio-button value="hybrid">混合</el-radio-button>
-        <el-radio-button value="vector">纯向量</el-radio-button>
-      </el-radio-group>
-      <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
-    </div>
+    <!-- J2 会话侧边栏 -->
+    <aside class="chat-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">会话</span>
+        <el-button size="small" type="primary" text @click="newChat">
+          <el-icon><Plus /></el-icon>
+          <span>新对话</span>
+        </el-button>
+      </div>
+      <div class="sidebar-list">
+        <div v-if="conversations.length === 0" class="sidebar-empty">
+          暂无会话<br />发送第一条消息自动创建
+        </div>
+        <div
+          v-for="conv in conversations"
+          :key="conv.id"
+          class="sidebar-item"
+          :class="{ 'sidebar-item--active': conv.id === activeConvId }"
+          @click="selectConversation(conv)"
+        >
+          <span class="sidebar-item-title" :title="conv.title">{{ conv.title }}</span>
+          <el-popconfirm title="删除该会话？" width="180" @confirm="removeConversation(conv)">
+            <template #reference>
+              <el-icon class="sidebar-item-del" @click.stop><Delete /></el-icon>
+            </template>
+          </el-popconfirm>
+        </div>
+      </div>
+    </aside>
 
-    <!-- 消息区 -->
-    <div ref="msgContainer" class="chat-messages">
-      <div v-if="messages.length === 0" class="chat-welcome">
-        <h3>开始对话</h3>
-        <p>基于知识库中的文档内容提问，AI 会检索相关片段并生成答案。</p>
+    <!-- 主聊天区 -->
+    <div class="chat-main">
+      <!-- 头部 -->
+      <div class="chat-header">
+        <el-button class="back-btn" @click="goBack">
+          <el-icon><ArrowLeft /></el-icon>
+          <span>返回</span>
+        </el-button>
+        <span class="chat-kb-name">{{ kbName }}</span>
+        <el-radio-group v-model="mode" size="small" class="chat-mode">
+          <el-radio-button value="hybrid">混合</el-radio-button>
+          <el-radio-button value="vector">纯向量</el-radio-button>
+        </el-radio-group>
+        <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
       </div>
 
-      <div
-        v-for="(msg, idx) in messages"
-        :key="idx"
-        class="chat-msg"
-        :class="{ 'chat-msg--user': msg.role === 'user', 'chat-msg--assistant': msg.role === 'assistant' }"
-      >
-        <div class="chat-msg-role">{{ msg.role === "user" ? "你" : "AI" }}</div>
-        <div class="chat-msg-content">
-          <div class="chat-msg-text">{{ msg.content }}</div>
-          <!-- 流式光标 -->
-          <span v-if="msg.streaming" class="chat-cursor">|</span>
+      <!-- 消息区 -->
+      <div ref="msgContainer" class="chat-messages">
+        <div v-if="messages.length === 0" class="chat-welcome">
+          <h3>开始对话</h3>
+          <p>基于知识库中的文档内容提问，AI 会检索相关片段并生成答案。</p>
+          <p class="chat-welcome-sub">对话自动保存，刷新后可继续</p>
+        </div>
 
-          <!-- 来源引用 -->
-          <div v-if="msg.sources.length > 0 && !msg.streaming" class="chat-sources">
-            <el-collapse>
-              <el-collapse-item :title="`引用来源（${msg.sources.length} 条）`">
-                <div v-for="src in msg.sources" :key="src.chunk_index" class="chat-source-item">
-                  <div class="chat-source-header">
-                    <el-tag size="small" type="info">{{ src.filename }}</el-tag>
-                    <span class="chat-source-score">相似度 {{ (src.score * 100).toFixed(1) }}%</span>
+        <div
+          v-for="(msg, idx) in messages"
+          :key="idx"
+          class="chat-msg"
+          :class="{ 'chat-msg--user': msg.role === 'user', 'chat-msg--assistant': msg.role === 'assistant' }"
+        >
+          <div class="chat-msg-role">{{ msg.role === "user" ? "你" : "AI" }}</div>
+          <div class="chat-msg-content">
+            <div class="chat-msg-text">{{ msg.content }}</div>
+            <!-- 流式光标 -->
+            <span v-if="msg.streaming" class="chat-cursor">|</span>
+
+            <!-- 来源引用 -->
+            <div v-if="msg.sources.length > 0 && !msg.streaming" class="chat-sources">
+              <el-collapse>
+                <el-collapse-item :title="`引用来源（${msg.sources.length} 条）`">
+                  <div v-for="src in msg.sources" :key="src.chunk_index" class="chat-source-item">
+                    <div class="chat-source-header">
+                      <el-tag size="small" type="info">{{ src.filename }}</el-tag>
+                      <span class="chat-source-score">相似度 {{ (src.score * 100).toFixed(1) }}%</span>
+                    </div>
+                    <p class="chat-source-content">{{ src.content.slice(0, 200) }}</p>
                   </div>
-                  <p class="chat-source-content">{{ src.content.slice(0, 200) }}</p>
-                </div>
-              </el-collapse-item>
-            </el-collapse>
+                </el-collapse-item>
+              </el-collapse>
+            </div>
           </div>
+        </div>
+
+        <!-- 错误 -->
+        <div v-if="errorMsg" class="chat-error">
+          {{ errorMsg }}
+          <el-button text size="small" @click="errorMsg = ''">关闭</el-button>
         </div>
       </div>
 
-      <!-- 错误 -->
-      <div v-if="errorMsg" class="chat-error">
-        {{ errorMsg }}
-        <el-button text size="small" @click="errorMsg = ''">关闭</el-button>
+      <!-- 输入区 -->
+      <div class="chat-input-area">
+        <el-input
+          v-model="input"
+          type="textarea"
+          :rows="2"
+          placeholder="输入问题..."
+          :disabled="sending"
+          @keydown.enter="onEnter"
+        />
+        <el-button
+          type="primary"
+          :loading="sending"
+          :disabled="!input.trim()"
+          @click="send"
+        >
+          发送
+        </el-button>
       </div>
-    </div>
-
-    <!-- 输入区 -->
-    <div class="chat-input-area">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="2"
-        placeholder="输入问题..."
-        :disabled="sending"
-        @keydown.enter="onEnter"
-      />
-      <el-button
-        type="primary"
-        :loading="sending"
-        :disabled="!input.trim()"
-        @click="send"
-      >
-        发送
-      </el-button>
     </div>
   </div>
 </template>
@@ -82,9 +116,14 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
-import { ArrowLeft } from "@element-plus/icons-vue";
-import { askStreamRequest, parseSseStream, type ChatTurn, type SourceRef } from "@/api/chat";
+import { ArrowLeft, Plus, Delete } from "@element-plus/icons-vue";
+import {
+  askStreamRequest,
+  parseSseStream,
+  conversationApi,
+  type Conversation,
+  type SourceRef,
+} from "@/api/chat";
 import { kbApi } from "@/api/kbs";
 
 interface Message {
@@ -105,6 +144,11 @@ const sending = ref(false);
 const errorMsg = ref("");
 const messages = ref<Message[]>([]);
 const msgContainer = ref<HTMLElement>();
+
+// J2 会话：侧边栏列表 + 当前选中会话
+const conversations = ref<Conversation[]>([]);
+const activeConvId = ref<number | null>(null);
+const loadingConv = ref(false);
 
 let abortController: AbortController | null = null;
 
@@ -132,15 +176,66 @@ function onEnter(e: KeyboardEvent) {
   send();
 }
 
-// J1 多轮：取最近 6 轮（user+assistant 成对，按消息条数 ×2）作为 history，
-// 只带文本、排除流式中的消息，当前问句由 query 单独发送
-const HISTORY_TURNS = 6;
+/** J2：切换/新建会话时中断在途流式请求（前端的活跃会话唯一） */
+function abortInFlight() {
+  abortController?.abort();
+  abortController = null;
+}
 
-function buildHistory(): ChatTurn[] {
-  return messages.value
-    .filter((m) => !m.streaming && m.content.trim())
-    .slice(-HISTORY_TURNS * 2)
-    .map((m) => ({ role: m.role, content: m.content }));
+async function loadConversations() {
+  try {
+    conversations.value = await conversationApi.list(kbId);
+  } catch {
+    // 列表加载失败静默（发送时自动建会话兜底）
+  }
+}
+
+/** 新对话：清空消息并取消选中，保持当前知识库 */
+function newChat() {
+  abortInFlight();
+  activeConvId.value = null;
+  messages.value = [];
+  errorMsg.value = "";
+  scrollBottom();
+}
+
+/** 选中历史会话：GET 详情加载消息（服务端推导历史，前端只展示） */
+async function selectConversation(conv: Conversation) {
+  if (conv.id === activeConvId.value || loadingConv.value) return;
+  abortInFlight();
+  activeConvId.value = conv.id;
+  loadingConv.value = true;
+  errorMsg.value = "";
+  try {
+    const detail = await conversationApi.detail(kbId, conv.id);
+    messages.value = detail.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      sources: m.sources,
+      streaming: false,
+    }));
+    scrollBottom();
+  } catch {
+    activeConvId.value = null;
+    messages.value = [];
+    errorMsg.value = "加载会话失败";
+  } finally {
+    loadingConv.value = false;
+  }
+}
+
+/** 删除会话（级联删消息）；若删除的是当前会话则回到新对话 */
+async function removeConversation(conv: Conversation) {
+  try {
+    await conversationApi.remove(kbId, conv.id);
+  } catch (e: any) {
+    errorMsg.value = e.response?.data?.detail || "删除会话失败";
+    return;
+  }
+  conversations.value = conversations.value.filter((c) => c.id !== conv.id);
+  if (activeConvId.value === conv.id) {
+    newChat();
+  }
 }
 
 async function send() {
@@ -149,7 +244,20 @@ async function send() {
 
   input.value = "";
   errorMsg.value = "";
-  const history = buildHistory(); // 当前问句入列前快照，作为上文
+
+  // J2：首次发送无会话 → 自动创建（title=提问前 30 字），之后复用 conversation_id
+  let convId = activeConvId.value;
+  if (convId == null) {
+    try {
+      const conv = await conversationApi.create(kbId, query.slice(0, 30));
+      convId = conv.id;
+      activeConvId.value = conv.id;
+      conversations.value.unshift(conv);
+    } catch (e: any) {
+      errorMsg.value = `创建会话失败：${e.response?.data?.detail || e.message || "请重试"}`;
+      return;
+    }
+  }
 
   // 添加用户消息
   messages.value.push({ role: "user", content: query, sources: [], streaming: false });
@@ -164,7 +272,12 @@ async function send() {
   abortController = new AbortController();
 
   try {
-    const resp = await askStreamRequest(kbId, query, abortController.signal, mode.value, history);
+    // J2：带 conversation_id，服务端从库内历史推导多轮上下文并落库，前端不再传 history
+    const resp = await askStreamRequest(kbId, query, {
+      signal: abortController.signal,
+      mode: mode.value,
+      conversationId: convId,
+    });
     const reader = resp.body!.getReader();
 
     for await (const event of parseSseStream(reader)) {
@@ -196,11 +309,12 @@ async function send() {
 
 onMounted(async () => {
   try {
-    const kb = await kbApi.list().then(list => list.find(k => k.id === kbId));
+    const kb = await kbApi.list().then((list) => list.find((k) => k.id === kbId));
     kbName.value = kb?.name || `知识库 #${kbId}`;
   } catch {
     kbName.value = `知识库 #${kbId}`;
   }
+  loadConversations();
 });
 
 onUnmounted(() => {
@@ -212,9 +326,94 @@ onUnmounted(() => {
 .chat-page {
   height: 100%;
   display: flex;
-  flex-direction: column;
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
+}
+
+/* ---- J2 会话侧边栏 ---- */
+.chat-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid #e4e7ed;
+  display: flex;
+  flex-direction: column;
+  margin-right: 20px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 12px;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 8px;
+}
+
+.sidebar-empty {
+  color: #c0c4cc;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.8;
+  padding: 24px 0;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #606266;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.sidebar-item:hover {
+  background: #f5f7fa;
+}
+
+.sidebar-item--active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.sidebar-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-item-del {
+  margin-left: 8px;
+  color: #c0c4cc;
+  flex-shrink: 0;
+}
+
+.sidebar-item-del:hover {
+  color: #f56c6c;
+}
+
+/* ---- 主聊天区 ---- */
+.chat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-header {
@@ -259,6 +458,11 @@ onUnmounted(() => {
 .chat-welcome h3 {
   font-size: 20px;
   margin-bottom: 8px;
+}
+
+.chat-welcome-sub {
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 .chat-msg {

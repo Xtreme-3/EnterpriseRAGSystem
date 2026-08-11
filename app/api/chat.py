@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_db
 from app.api.kbs import _get_user_kb_or_403
 from app.config import get_settings
-from app.core.models import QaLog, User
+from app.core.models import ChatMessage, Conversation, QaLog, User, utcnow
 from app.storage.vector_store import build_vector_store
 
 logger = logging.getLogger("app.chat")
@@ -51,6 +51,10 @@ class AskRequest(BaseModel):
         max_length=20,
         description="J1 多轮：最近对话轮次（最多 20 条），用于查询改写与上下文",
     )
+    conversation_id: int | None = Field(
+        default=None,
+        description="J2 会话持久化：指定会话时，history 由服务端从库内推导并落库本轮消息",
+    )
 
     @field_validator("mode")
     @classmethod
@@ -74,6 +78,38 @@ class AskResponse(BaseModel):
     rewritten_query: str = Field(
         default="", description="J1 多轮：改写后的检索问句（无历史/未改写时为原始 query）"
     )
+    conversation_id: int | None = Field(
+        default=None, description="J2：本轮消息归属的会话 id（未指定会话为 None）"
+    )
+
+
+class ConversationOut(BaseModel):
+    id: int
+    kb_id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    sources: list[dict]
+    rewritten_query: str
+    created_at: datetime
+
+
+class ConversationDetailOut(ConversationOut):
+    messages: list[ChatMessageOut] = []
+
+
+class ConversationCreateRequest(BaseModel):
+    title: str = Field(default="新对话", min_length=1, max_length=200)
+
+
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
 
 
 class QaLogOut(BaseModel):
@@ -142,6 +178,79 @@ def _parse_doc_ids(raw: str) -> list[int]:
         return []
 
 
+# ---- J2 会话持久化 helpers ----
+
+def _parse_sources(raw: str) -> list[dict]:
+    """反序列化消息 sources（防御非法 JSON）。"""
+    try:
+        data = json.loads(raw or "[]")
+        return data if isinstance(data, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _sources_json(result) -> str:
+    """把 RagAnswer.sources 序列化为消息落库 JSON。"""
+    return json.dumps(
+        [
+            {
+                "filename": s.filename,
+                "chunk_index": s.chunk_index,
+                "content": s.content,
+                "score": round(s.score, 4),
+            }
+            for s in result.sources
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _get_user_conversation(db: Session, kb_id: int, conv_id: int, user: User) -> Conversation:
+    """按 kb+用户 取会话：不存在或别库 404；他人私有会话 403。"""
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is None or conv.kb_id != kb_id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if conv.user_id != user.id:
+        raise HTTPException(status_code=403, detail="无权访问该会话")
+    return conv
+
+
+def _conversation_history(db: Session, conv: Conversation) -> list[ChatMessage]:
+    """会话内已有消息（id 正序），作为本轮改写与生成的上下文。"""
+    return (
+        db.query(ChatMessage)
+        .filter(ChatMessage.conversation_id == conv.id)
+        .order_by(ChatMessage.id)
+        .all()
+    )
+
+
+def _save_turn(
+    db: Session,
+    conv: Conversation,
+    role: str,
+    content: str,
+    sources: str = "[]",
+    rewritten_query: str = "",
+) -> None:
+    db.add(
+        ChatMessage(
+            conversation_id=conv.id,
+            role=role,
+            content=content,
+            sources=sources,
+            rewritten_query=rewritten_query,
+        )
+    )
+
+
+def _touch_conversation(db: Session, conv: Conversation, query: str) -> None:
+    """更新会话活动时间；首条消息时把标题设为提问前 30 字。"""
+    conv.updated_at = utcnow()
+    if conv.title == "新对话":
+        conv.title = query[:30]
+
+
 # ---- B6-1: 非流式问答 ----
 
 
@@ -153,22 +262,39 @@ def ask(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> AskResponse:
-    """向知识库提问，返回完整答案与引用来源。J1：可选携带 history 走多轮改写。"""
+    """向知识库提问，返回完整答案与引用来源。
+
+    J1：可携带 history 走多轮改写；J2：带 conversation_id 时服务端从库内历史推导
+    history，并把本轮 user/assistant 消息落库（成功后才落，失败不落半条）。
+    """
     _get_user_kb_or_403(db, kb_id, current_user)
+
+    conv = None
+    history = req.history or None
+    if req.conversation_id is not None:
+        conv = _get_user_conversation(db, kb_id, req.conversation_id, current_user)
+        history = _conversation_history(db, conv)
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query, mode=req.mode, history=req.history or None)
+        result = rag.ask(kb_id, req.query, mode=req.mode, history=history)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
     _log_qa(db, current_user, kb_id, result)
+
+    if conv is not None:
+        _save_turn(db, conv, "user", req.query)
+        _save_turn(db, conv, "assistant", result.answer,
+                   sources=_sources_json(result), rewritten_query=result.rewritten_query)
+        _touch_conversation(db, conv, req.query)
 
     return AskResponse(
         query=result.query,
         answer=result.answer,
         sources=_to_sources(result.sources),
         rewritten_query=result.rewritten_query,
+        conversation_id=conv.id if conv else None,
     )
 
 
@@ -183,16 +309,28 @@ def ask_stream(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """向知识库提问，SSE 流式返回答案 + 最终来源。"""
+    """向知识库提问，SSE 流式返回答案 + 最终来源。J2：支持会话落库（同 ask）。"""
     _get_user_kb_or_403(db, kb_id, current_user)
+
+    conv = None
+    history = req.history or None
+    if req.conversation_id is not None:
+        conv = _get_user_conversation(db, kb_id, req.conversation_id, current_user)
+        history = _conversation_history(db, conv)
 
     rag = _build_rag(request)
     try:
-        result = rag.ask(kb_id, req.query, mode=req.mode, history=req.history or None)
+        result = rag.ask(kb_id, req.query, mode=req.mode, history=history)
     except Exception:
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
     _log_qa(db, current_user, kb_id, result)
+
+    if conv is not None:
+        _save_turn(db, conv, "user", req.query)
+        _save_turn(db, conv, "assistant", result.answer,
+                   sources=_sources_json(result), rewritten_query=result.rewritten_query)
+        _touch_conversation(db, conv, req.query)
 
     def event_stream() -> Generator[str, None, None]:
         """逐字符流式推送答案（V1：完整生成后分片模拟，效果等效）。"""
@@ -202,7 +340,7 @@ def ask_stream(
             token = result.answer[i : i + chunk_size]
             yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
 
-        # 推送来源（含改写问句，便于多轮调试）
+        # 推送来源（含改写问句与会话 id，便于多轮调试）
         sources_data = [
             {
                 "filename": s.filename,
@@ -212,7 +350,7 @@ def ask_stream(
             }
             for s in result.sources
         ]
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data, 'rewritten_query': result.rewritten_query}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data, 'rewritten_query': result.rewritten_query, 'conversation_id': conv.id if conv else None}, ensure_ascii=False)}\n\n"
 
         # 结束
         yield "data: [DONE]\n\n"
@@ -226,6 +364,138 @@ def ask_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---- J2: 会话 CRUD ----
+
+@router.post(
+    "/{kb_id}/conversations",
+    response_model=ConversationOut,
+    status_code=201,
+)
+def create_conversation(
+    kb_id: int,
+    req: ConversationCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ConversationOut:
+    """创建会话（默认标题"新对话"）。会话是当前用户私有数据，viewer+ 可建。"""
+    _get_user_kb_or_403(db, kb_id, current_user)
+
+    conv = Conversation(
+        kb_id=kb_id,
+        user_id=current_user.id,
+        title=req.title.strip() or "新对话",
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    return ConversationOut(
+        id=conv.id,
+        kb_id=conv.kb_id,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+    )
+
+
+@router.get("/{kb_id}/conversations", response_model=list[ConversationOut])
+def list_conversations(
+    kb_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ConversationOut]:
+    """会话列表：仅当前用户的会话，按 updated_at 倒序（新对话置顶）。"""
+    _get_user_kb_or_403(db, kb_id, current_user)
+
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.kb_id == kb_id, Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    return [
+        ConversationOut(
+            id=c.id,
+            kb_id=c.kb_id,
+            title=c.title,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c in convs
+    ]
+
+
+@router.get("/{kb_id}/conversations/{conv_id}", response_model=ConversationDetailOut)
+def get_conversation(
+    kb_id: int,
+    conv_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ConversationDetailOut:
+    """会话详情：含按 id 正序的消息列表（assistant 消息带 sources/rewritten_query）。"""
+    _get_user_kb_or_403(db, kb_id, current_user)
+    conv = _get_user_conversation(db, kb_id, conv_id, current_user)
+
+    messages = [
+        ChatMessageOut(
+            id=m.id,
+            role=m.role,
+            content=m.content,
+            sources=_parse_sources(m.sources),
+            rewritten_query=m.rewritten_query,
+            created_at=m.created_at,
+        )
+        for m in _conversation_history(db, conv)
+    ]
+    return ConversationDetailOut(
+        id=conv.id,
+        kb_id=conv.kb_id,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        messages=messages,
+    )
+
+
+@router.patch("/{kb_id}/conversations/{conv_id}", response_model=ConversationOut)
+def rename_conversation(
+    kb_id: int,
+    conv_id: int,
+    req: ConversationRenameRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ConversationOut:
+    """会话改名（UI 暂不做，接口预留）。"""
+    _get_user_kb_or_403(db, kb_id, current_user)
+    conv = _get_user_conversation(db, kb_id, conv_id, current_user)
+
+    conv.title = req.title.strip() or "新对话"
+    db.commit()
+    db.refresh(conv)
+    return ConversationOut(
+        id=conv.id,
+        kb_id=conv.kb_id,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+    )
+
+
+@router.delete("/{kb_id}/conversations/{conv_id}")
+def delete_conversation(
+    kb_id: int,
+    conv_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """删除会话（级联删除其消息）。"""
+    _get_user_kb_or_403(db, kb_id, current_user)
+    conv = _get_user_conversation(db, kb_id, conv_id, current_user)
+
+    db.delete(conv)
+    db.commit()
+    return {"status": "ok"}
 
 
 # ---- G4: 问答历史 ----
