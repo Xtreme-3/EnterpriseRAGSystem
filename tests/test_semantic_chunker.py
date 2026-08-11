@@ -130,13 +130,15 @@ def test_semantic_threshold_controls_split() -> None:
 
 # ---- 配置校验 ----
 
-def test_chunk_strategy_validator() -> None:
+def test_chunk_strategy_validator(monkeypatch) -> None:
     assert Settings(chunk_strategy="fixed").chunk_strategy == "fixed"
     assert Settings(chunk_strategy="structure").chunk_strategy == "structure"
     assert Settings(chunk_strategy="structure+semantic").chunk_strategy == "structure+semantic"
     with pytest.raises(Exception):
         Settings(chunk_strategy="bogus")
-    assert Settings().chunk_strategy == "fixed"  # 默认保持回归兜底
+    # 默认值验证须与环境隔离：本地 .env 可能设 CHUNK_STRATEGY 覆盖代码默认（本项目 .env 即 structure）
+    monkeypatch.delenv("CHUNK_STRATEGY", raising=False)
+    assert Settings(_env_file=None).chunk_strategy == "fixed"  # 代码默认保持回归兜底
 
 
 # ---- 摄取接入：structure 策略可跑通 ----

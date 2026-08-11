@@ -26,6 +26,8 @@
             <el-radio-button value="hybrid">混合（向量+关键词）</el-radio-button>
             <el-radio-button value="vector">纯向量</el-radio-button>
           </el-radio-group>
+          <span class="control-label">重排</span>
+          <el-switch v-model="rerank" size="small" />
           <span class="control-label">top_k</span>
           <el-slider
             v-model="topK"
@@ -58,6 +60,7 @@
       <div class="hits-summary">
         共 {{ hits.length }} 条命中
         <span v-if="usedMode" class="hits-mode">· 检索模式：{{ usedMode }}</span>
+        <span v-if="usedRerank" class="hits-mode">· 已重排</span>
       </div>
       <div v-for="(hit, idx) in hits" :key="idx" class="hit-card">
         <div class="hit-rank">
@@ -68,13 +71,31 @@
             <el-tag size="small" type="info">{{ hit.filename }}</el-tag>
             <span class="meta-sep">chunk #{{ hit.chunk_index }}</span>
           </div>
-          <div class="score-row">
+          <!-- 未重排：单一相似度条 -->
+          <div v-if="!usedRerank" class="score-row">
             <span class="score-label">相似度</span>
             <div class="score-bar-track">
               <div class="score-bar-fill" :style="{ width: scorePct(hit.score) + '%' }"></div>
             </div>
             <span class="score-value">{{ scorePct(hit.score) }}%</span>
           </div>
+          <!-- 重排：检索（重排前）vs 重排 前后对比 -->
+          <template v-else>
+            <div class="score-row">
+              <span class="score-label">检索</span>
+              <div class="score-bar-track">
+                <div class="score-bar-fill pre" :style="{ width: scorePct(hit.pre_score) + '%' }"></div>
+              </div>
+              <span class="score-value">{{ scorePct(hit.pre_score) }}%</span>
+            </div>
+            <div class="score-row">
+              <span class="score-label">重排</span>
+              <div class="score-bar-track">
+                <div class="score-bar-fill" :style="{ width: scorePct(hit.score) + '%' }"></div>
+              </div>
+              <span class="score-value">{{ scorePct(hit.score) }}%</span>
+            </div>
+          </template>
           <div class="hit-content" :class="{ expanded: expanded.has(idx) }">
             {{ hit.content }}
           </div>
@@ -107,7 +128,9 @@ const kbName = ref("");
 const query = ref("");
 const topK = ref(5);
 const mode = ref("hybrid");
+const rerank = ref(false);
 const usedMode = ref("");
+const usedRerank = ref(false);
 const hits = ref<InspectHit[]>([]);
 const ran = ref(false);
 const loading = ref(false);
@@ -143,9 +166,10 @@ async function runInspect() {
   }
   loading.value = true;
   try {
-    const result = await inspectApi.inspect(kbId, query.value.trim(), topK.value, mode.value);
+    const result = await inspectApi.inspect(kbId, query.value.trim(), topK.value, mode.value, rerank.value);
     hits.value = result.hits;
     usedMode.value = result.mode;
+    usedRerank.value = result.rerank;
     ran.value = true;
   } catch (err: any) {
     ElMessage.error(err.response?.data?.detail || "检索失败");
@@ -286,6 +310,11 @@ async function runInspect() {
   background: var(--el-color-primary);
   border-radius: 3px;
   transition: width 0.3s ease;
+}
+
+/* 重排前检索分：灰色条（前后对比用） */
+.score-bar-fill.pre {
+  background: #c0c4cc;
 }
 
 .score-value {

@@ -28,6 +28,9 @@ class InspectRequest(BaseModel):
     mode: str | None = Field(
         default=None, description="检索模式：vector | hybrid；不传用服务端配置默认"
     )
+    rerank: bool | None = Field(
+        default=None, description="是否重排（I1）：null 用服务端 Settings.rerank"
+    )
 
     @field_validator("mode")
     @classmethod
@@ -42,7 +45,8 @@ class InspectHit(BaseModel):
     filename: str
     chunk_index: int
     content: str
-    score: float
+    score: float  # 最终分数：重排后 = 重排分；未重排 = 检索分
+    pre_score: float  # 重排前检索分（未重排时与 score 相同），I1 前后对比
 
 
 class InspectResponse(BaseModel):
@@ -50,6 +54,7 @@ class InspectResponse(BaseModel):
     kb_id: int
     top_k: int
     mode: str
+    rerank: bool
     hits: list[InspectHit]
 
 
@@ -68,8 +73,10 @@ def inspect_retrieval(
     settings = get_settings()
     k = req.top_k if req.top_k > 0 else settings.top_k
     mode = req.mode or settings.retrieval_mode
+    effective_rerank = req.rerank if req.rerank is not None else settings.rerank
 
-    from app.providers.factory import build_embedding
+    from app.providers.factory import build_embedding, build_reranker
+    from app.rag.reranker import Reranker
     from app.rag.retriever import Retriever
     from app.storage.vector_store import build_vector_store
 
@@ -79,6 +86,16 @@ def inspect_retrieval(
     except Exception:
         logger.exception("检索服务异常 kb_id=%s", kb_id)
         raise HTTPException(status_code=502, detail="检索服务暂时不可用")
+
+    # I1 重排：先记录重排前检索分，重排后命中 score 替换为重排分（前后对比）
+    pre_map = {(h.document_id, h.chunk_index): h.score for h in hits}
+    if effective_rerank and hits:
+        try:
+            reranker = Reranker(build_reranker(settings.model_copy(update={"rerank": True})))
+            hits = reranker.rerank(req.query, hits, top_n=k)
+        except Exception:
+            logger.exception("重排服务异常 kb_id=%s", kb_id)
+            raise HTTPException(status_code=502, detail="重排服务暂时不可用")
 
     # 补充文档名
     doc_ids = {h.document_id for h in hits}
@@ -92,6 +109,7 @@ def inspect_retrieval(
         kb_id=kb_id,
         top_k=k,
         mode=mode,
+        rerank=effective_rerank,
         hits=[
             InspectHit(
                 document_id=h.document_id,
@@ -99,6 +117,7 @@ def inspect_retrieval(
                 chunk_index=h.chunk_index,
                 content=h.content,
                 score=round(h.score, 4),
+                pre_score=round(pre_map.get((h.document_id, h.chunk_index), h.score), 4),
             )
             for h in hits
         ],

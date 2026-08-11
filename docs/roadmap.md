@@ -78,5 +78,6 @@
 | **G5** | **文档健康分析 `GET /api/kbs/{id}/doc-health` + 前端 `/kbs/:kbId/doc-health`**（死文档 + 命中热力，复用 G4 日志） | ✅ |
 | **H1** | **混合检索**（tokenize 中文2-gram+英文保序 + fuse_hybrid 加权归一化；chroma/pgvector search_lexical；`RETRIEVAL_MODE` 配置 + Retriever mode + inspect 返回 mode） | ✅ |
 | **H2** | **语义切分**（`split_structure` 结构优先：标题/编号条款为块起点，离线免费；`split_semantic` 结构+句级 embedding 微调；`CHUNK_STRATEGY` 配置 + ingest 接入） | ✅ |
+| **I1** | **重排序 Rerank**（`RerankProvider` 接口 + Noop/Mock/OpenAICompat(gte-rerank) 三实现；`RERANK` 配置；质检台重排开关 + 检索/重排前后分数对比） | ✅ |
 
 暂不拆块，等 V1 全部完成再排期。级别按 README「迭代路线图」：RBAC 权限、混合检索、Rerank、多轮对话、点赞/反馈日志、数据看板、管理后台（用户管理/系统配置/审计日志查询）、文档增量更新、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成（Playwright 浏览器自动化 + RAG 智能决策）。

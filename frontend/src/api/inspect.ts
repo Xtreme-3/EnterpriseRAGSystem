@@ -6,6 +6,8 @@ export interface InspectHit {
   chunk_index: number;
   content: string;
   score: number;
+  /** 重排前检索分（未重排时与 score 相同），I1 前后对比 */
+  pre_score: number;
 }
 
 export interface InspectResponse {
@@ -13,6 +15,8 @@ export interface InspectResponse {
   kb_id: number;
   top_k: number;
   mode: string;
+  /** 实际是否重排 */
+  rerank: boolean;
   hits: InspectHit[];
 }
 
@@ -21,8 +25,11 @@ export const inspectApi = {
     kbId: number,
     query: string,
     topK: number = 0,
-    mode: string = "hybrid"
+    mode: string = "hybrid",
+    rerank: boolean = false
   ): Promise<InspectResponse> {
-    return client.post(`/kbs/${kbId}/inspect`, { query, top_k: topK, mode }).then((r) => r.data);
+    return client
+      .post(`/kbs/${kbId}/inspect`, { query, top_k: topK, mode, rerank })
+      .then((r) => r.data);
   },
 };

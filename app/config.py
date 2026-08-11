@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     vector_store: str = "chroma"  # chroma | pgvector
     # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索
     retrieval_mode: str = "hybrid"
+    # 重排（I1）：true 启用——检索后按重排模型/词重叠重排候选，替换检索分作为命中分。
+    # 默认 false（不引入额外延迟/成本，检索排序与分数完全不变）。
+    rerank: bool = False
+    # 真实重排模型名（DashScope gte-rerank 等，走 {base_url}/rerank）
+    rerank_model: str = "gte-rerank"
     # 切块策略（H2 语义切分）：fixed（定长递归，默认，回归兜底）| structure（结构优先语义切分）
     # | structure+semantic（结构 + 句级 embedding 微调，需真实 embedding 才有意义）
     chunk_strategy: str = "fixed"

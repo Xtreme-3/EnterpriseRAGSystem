@@ -29,8 +29,11 @@ class LLMProvider(ABC):
 
 
 class RerankProvider(ABC):
-    """查询-候选 重排序，可选插槽。"""
+    """查询-候选 重排序，可选插槽（I1 做实）。"""
 
     @abstractmethod
-    def rerank(self, query: str, texts: list[str]) -> list[float]:
-        """返回每条候选文本的相关性分数（越大越相关），顺序与 texts 一致。"""
+    def rerank(self, query: str, texts: list[str], scores: list[float]) -> list[float]:
+        """返回每条候选文本的重排相关性分数（越大越相关），顺序与 texts/scores 一致。
+
+        ``scores`` 为原始检索分（与 texts 对齐），Noop/混合实现可据此兜底。
+        """

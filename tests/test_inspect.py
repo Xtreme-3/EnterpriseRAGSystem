@@ -65,8 +65,14 @@ def _cleanup():
     )
     conn.autocommit = True
     cur = conn.cursor()
-    cur.execute("DELETE FROM knowledge_bases WHERE name LIKE 'test_g1%' OR name LIKE 'test_h1%'")
-    cur.execute("DELETE FROM users WHERE username LIKE 'test_g1%' OR username LIKE 'test_h1%'")
+    cur.execute(
+        "DELETE FROM knowledge_bases "
+        "WHERE name LIKE 'test_g1%' OR name LIKE 'test_h1%' OR name LIKE 'test_i1%'"
+    )
+    cur.execute(
+        "DELETE FROM users "
+        "WHERE username LIKE 'test_g1%' OR username LIKE 'test_h1%' OR username LIKE 'test_i1%'"
+    )
     conn.close()
 
 
@@ -230,4 +236,86 @@ def test_inspect_empty_kb_mode_and_hits(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["mode"] == "hybrid"
+    assert data["hits"] == []
+
+
+# ---- I1: 重排 rerank ----
+
+
+def _upload_intro(client: TestClient, kb_id: int, token: str):
+    return _upload(
+        client, kb_id, token, "ai_intro.txt",
+        "人工智能是计算机科学的一个分支，致力于创建能够模拟人类智能的系统。".encode("utf-8"),
+    )
+
+
+def test_inspect_rerank_default_off(client: TestClient) -> None:
+    """不传 rerank：用服务端配置（默认 False），pre_score == score（Noop 恒等）。"""
+    token = _register_and_login(client, "test_i1_default")
+    kb_id = _create_kb(client, token, "test_i1_default_kb")
+    _upload_intro(client, kb_id, token)
+    resp = client.post(
+        f"/api/kbs/{kb_id}/inspect",
+        json={"query": "人工智能", "top_k": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rerank"] is False
+    assert data["hits"]
+    for h in data["hits"]:
+        assert "pre_score" in h
+        assert h["pre_score"] == h["score"]  # 未重排：重排分即检索分
+    scores = [h["score"] for h in data["hits"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_inspect_rerank_explicit_false(client: TestClient) -> None:
+    token = _register_and_login(client, "test_i1_off")
+    kb_id = _create_kb(client, token, "test_i1_off_kb")
+    _upload_intro(client, kb_id, token)
+    resp = client.post(
+        f"/api/kbs/{kb_id}/inspect",
+        json={"query": "人工智能", "rerank": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["rerank"] is False
+
+
+def test_inspect_rerank_on_returns_reranked_scores(client: TestClient) -> None:
+    """rerank=true：响应 rerank=true，命中分数为词重叠重排分（∈[0,1]），pre_score 保留检索分。"""
+    token = _register_and_login(client, "test_i1_on")
+    kb_id = _create_kb(client, token, "test_i1_on_kb")
+    _upload_intro(client, kb_id, token)
+    resp = client.post(
+        f"/api/kbs/{kb_id}/inspect",
+        json={"query": "人工智能", "rerank": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rerank"] is True
+    assert data["hits"]
+    for h in data["hits"]:
+        assert "pre_score" in h
+        assert 0.0 <= h["score"] <= 1.0
+    scores = [h["score"] for h in data["hits"]]
+    assert scores == sorted(scores, reverse=True)
+    # 与 query 词重叠最高的切片排最前（query 含"人工智能"）
+    assert "人工智能" in data["hits"][0]["content"]
+
+
+def test_inspect_rerank_empty_kb_still_200(client: TestClient) -> None:
+    """空库 + rerank=true：仍 200，rerank=true，hits 空。"""
+    token = _register_and_login(client, "test_i1_empty")
+    kb_id = _create_kb(client, token, "test_i1_empty_kb")
+    resp = client.post(
+        f"/api/kbs/{kb_id}/inspect",
+        json={"query": "test", "rerank": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rerank"] is True
     assert data["hits"] == []
