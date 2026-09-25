@@ -102,6 +102,20 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 ## 六、快速开始
 
+### 方式一：容器（一条命令，含 PostgreSQL + pgvector）
+
+```bash
+docker compose up --build
+# 浏览器打开 http://localhost:8080
+```
+
+起三个容器：`web`（nginx 托管 SPA 并反代 `/api`）、`api`（FastAPI）、`db`（`pgvector/pgvector:pg17`）。
+默认 `VECTOR_STORE=pgvector`，元数据与向量共库；`RAG_PROVIDER=mock`，**不需要任何 API Key**。
+
+想接真模型：编辑 `docker-compose.yml` 里 `api` 服务的 `RAG_PROVIDER` 为 `dashscope` / `zhipu`，填入对应 Key 后 `docker compose up -d`。
+
+### 方式二：本地开发
+
 ```bash
 # 1. 建虚拟环境并装依赖
 python -m venv .venv
@@ -137,6 +151,9 @@ frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 24 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
 tests/                   # 187 个离线单测（mock 供应商，无需网络）
 ```
+
+容器化相关（根目录）：`Dockerfile`（API 镜像）、`frontend/Dockerfile`（前端构建 + nginx）、
+`docker-compose.yml`（`web` + `api` + `db` 三服务编排）。
 
 ## 八、核心配置
 

@@ -73,6 +73,17 @@ copy .env.example .env         # 填 DASHSCOPE_API_KEY 或 ZHIPU_API_KEY
 python scripts/demo.py         # 离线冒烟（mock 供应商）
 ```
 
+## 容器化
+
+- `Dockerfile`：API 镜像。依赖从 `pyproject.toml` 抽取后安装（pyproject 仍是唯一依赖来源），
+  因此只改 `app/` 不会让依赖层缓存失效
+- `frontend/Dockerfile`：node 构建 SPA → nginx 托管并反代 `/api`
+- `docker-compose.yml`：`web` + `api` + `db(pgvector/pgvector:pg17)`；默认
+  `VECTOR_STORE=pgvector`（元数据与向量共库，不再是 SQLite + ChromaDB）+ `RAG_PROVIDER=mock`
+- **易踩的两个点**：①健康检查端点是 `/health`，**不带** `/api` 前缀，nginx 里需单独配 location；
+  ②前端 axios `baseURL` 是相对路径 `/api`，走同源反代即可，后端**没有也不需要** CORS 配置
+- SSE 流式问答在 nginx 里必须 `proxy_buffering off`，否则答案会被缓冲到最后一次性吐出
+
 ## 当前状态
 
 **V1 全部完成**，进阶功能已完成 G1–G5 / H1 / H2 / I1 / I2 / J1 / J2。

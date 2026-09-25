@@ -1,0 +1,17 @@
+# 构建上下文只需源码：依赖由 npm ci 在镜像内安装，产物由 vite 生成
+node_modules/
+dist/
+
+# 本地环境与缓存
+.env
+.env.*
+*.log
+
+npm-debug.log*
+.npm/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

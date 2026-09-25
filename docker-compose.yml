@@ -1,0 +1,70 @@
+# 一条命令起全套：PostgreSQL(pgvector) + FastAPI + Vue3/nginx
+#
+#   docker compose up --build          # 首次构建并启动
+#   浏览器打开 http://localhost:8080    # 注册 → 建库 → 传文档 → 提问
+#
+# 默认走 mock 供应商：不需要任何 API Key，全链路可离线跑通。
+# 要接真模型，把 api 服务里的 RAG_PROVIDER 改成 dashscope 或 zhipu 并填对应 Key。
+
+name: enterprise-rag
+
+services:
+  # ---------- 数据库：同时承载元数据与向量 ----------
+  # 后端会自动执行 CREATE EXTENSION IF NOT EXISTS vector，无需额外初始化脚本。
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-ragpass}
+      POSTGRES_DB: ${PG_DATABASE:-ragdb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DATABASE:-ragdb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------- 后端 API ----------
+  api:
+    build: .
+    environment:
+      # 存储：VECTOR_STORE=pgvector 时元数据与向量共库（不再是 SQLite + ChromaDB）
+      VECTOR_STORE: pgvector
+      PG_HOST: db          # 容器内用服务名寻址，不能沿用 .env 里的 localhost
+      PG_PORT: "5432"
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:-ragpass}
+      PG_DATABASE: ${PG_DATABASE:-ragdb}
+
+      # 模型供应商：mock 无需 Key；改 dashscope / zhipu 时同时填对应 Key
+      RAG_PROVIDER: mock
+      DASHSCOPE_API_KEY: ""
+      ZHIPU_API_KEY: ""
+
+      # 检索与切分：制度/手册类文档用 structure 切分效果更好，
+      # hybrid 用于工单号、型号等精确词的召回
+      RETRIEVAL_MODE: hybrid
+      CHUNK_STRATEGY: structure
+      RERANK: "false"
+
+      # 鉴权：上线前务必换成随机串（openssl rand -hex 32）
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------- 前端：nginx 托管 SPA 并反代 /api ----------
+  web:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
