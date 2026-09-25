@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # 默认 mock：无需 API Key 即可离线跑通全链路；配 .env 后改 dashscope / zhipu
     rag_provider: str = "mock"  # dashscope | zhipu | mock
 
+    # 插槽级覆盖（留空 = 跟随 rag_provider）。场景：LLM 走中转站 A（只有对话模型），
+    # embedding 走另一家或本地 mock。三插槽本就独立，这里只是把"可分别配置"暴露出来。
+    embedding_provider: str = ""  # dashscope | zhipu | mock，空=跟随 rag_provider
+    llm_provider: str = ""        # dashscope | zhipu | mock，空=跟随 rag_provider
+
     # DashScope（通义千问）
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"

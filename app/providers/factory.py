@@ -76,29 +76,35 @@ class OpenAICompatRerank(RerankProvider):
         return scores
 
 
-def _resolve_endpoint(settings: Settings) -> tuple[str, str]:
-    """按 RAG_PROVIDER 返回 (base_url, api_key)，key 为空时给出明确提示。"""
-    if settings.rag_provider == "dashscope":
+def _resolve_endpoint(settings: Settings, provider: str | None = None) -> tuple[str, str]:
+    """按供应商名返回 (base_url, api_key)，key 为空时给出明确提示。
+
+    ``provider`` 缺省时用 settings.rag_provider；插槽级覆盖（embedding_provider /
+    llm_provider）由各 build_* 自行决定传入值。
+    """
+    p = provider or settings.rag_provider
+    if p == "dashscope":
         base_url, api_key = settings.dashscope_base_url, settings.dashscope_api_key
-    elif settings.rag_provider == "zhipu":
+    elif p == "zhipu":
         base_url, api_key = settings.zhipu_base_url, settings.zhipu_api_key
     else:
-        raise ValueError(f"不支持的非 OpenAI 兼容供应商: {settings.rag_provider}")
+        raise ValueError(f"不支持的非 OpenAI 兼容供应商: {p}")
 
     if not api_key:
         raise ValueError(
-            f"供应商 {settings.rag_provider} 未配置 API Key。"
+            f"供应商 {p} 未配置 API Key。"
             f"请复制 .env.example 为 .env，填写 "
-            f"{settings.rag_provider.upper()}_API_KEY 后重试。"
+            f"{p.upper()}_API_KEY 后重试。"
         )
     return base_url, api_key
 
 
 def build_embedding(settings: Settings | None = None) -> EmbeddingProvider:
     s = settings or get_settings()
-    if s.rag_provider == "mock":
+    p = s.embedding_provider or s.rag_provider
+    if p == "mock":
         return MockEmbedding()
-    base_url, api_key = _resolve_endpoint(s)
+    base_url, api_key = _resolve_endpoint(s, p)
     return OpenAICompatEmbedding(
         base_url=base_url, api_key=api_key, model=s.embedding_model, dim=s.embedding_dim
     )
@@ -106,9 +112,10 @@ def build_embedding(settings: Settings | None = None) -> EmbeddingProvider:
 
 def build_llm(settings: Settings | None = None) -> LLMProvider:
     s = settings or get_settings()
-    if s.rag_provider == "mock":
+    p = s.llm_provider or s.rag_provider
+    if p == "mock":
         return MockLLM()
-    base_url, api_key = _resolve_endpoint(s)
+    base_url, api_key = _resolve_endpoint(s, p)
     return OpenAICompatLLM(base_url=base_url, api_key=api_key, model=s.llm_model)
 
 
@@ -122,7 +129,8 @@ def build_reranker(settings: Settings | None = None) -> RerankProvider:
     s = settings or get_settings()
     if not s.rerank:
         return NoopRerank()
-    if s.rag_provider == "mock":
+    p = s.llm_provider or s.rag_provider  # rerank 跟随 LLM 插槽（同一家中转通常一起提供）
+    if p == "mock":
         return MockRerank()
-    base_url, api_key = _resolve_endpoint(s)
+    base_url, api_key = _resolve_endpoint(s, p)
     return OpenAICompatRerank(base_url=base_url, api_key=api_key, model=s.rerank_model)
