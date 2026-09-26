@@ -94,26 +94,80 @@ Element Plus 已在 `dependencies`，测试里挂 `global.plugins` 即可。
    （已按此实现，`vue-tsc` exit 0。）
 2. **不会打进产物**：`vite build` 只从 `index.html` 的可达图打包，孤立的 `*.spec.ts` 不进 bundle。
 
-## 未定论观察（**不写成缺陷**，因为未在真实浏览器确认）
+## 一个已查清的 jsdom 差异（**不是缺陷，不改业务代码**）
+
+> 这篇的初版曾写成「未定论观察 —— 未在真实浏览器复现前不定性」。
+> 那个处理方式被用户指出是**回避**：既然读写到的行为与库源码逻辑相悖，就该查到底，
+> 而不是挂成「观察」。已按 `systematic-debugging` 走完根因调查 + **真实 Chromium 复现**，
+> 结论如下（**初版结论已被真实浏览器验证推翻**）。
 
 环境：Element Plus **2.14.3**（`package.json` 声明的是 `^2.5.0`，`^` 允许装到 2.14.3）+ jsdom。
 
-**现象** —— 空表单点「登录」时：
+### 在 jsdom 里观察到的现象
+
+空表单点「登录」时：
+
 - 每个字段的 `validate("")` **都会 reject**（已单独验证 `fields[0].validate("")` → rejected）；
 - 但 **`ElForm` 级别的 `validate()` 会 resolve `true`**，于是请求带着空用户名/密码发了出去。
 
-**与源码矛盾** —— 读到 `node_modules/element-plus/es/components/form/src/form.vue_vue_type_script_setup_true_lang.mjs`
-的 `doValidateField`：逐个 `await field.validate("")`，任一抛错都并入 `validationErrors`，
-非空则 `Promise.reject(validationErrors)`；`filterFields(fields, [])` 在 `normalized` 为空时**返回全部字段**
-（`utils.mjs:35-38`）。按此逻辑应当 reject。**确实是通过 `Login.vue` 自己的代码路径观察到的**
-（`authApi.login` 被调用且参数是空串），不是 `vm` 代理的读数假象。清掉 `node_modules/.vite` 缓存后现象不变。
+### 根因（已锁定，带证据）
 
-**结论与处置** —— 无法在真实浏览器复现前不定性。
-- 把「校验拦住表单」这类**依赖第三方内部行为**的断言从套件里移除了（那种断言脆弱且测的不是本仓代码）；
-- 改为两条只断言**本仓契约**的用例：①用「校验必然失败」的 `el-form` 替身，确定性验证 `Login.vue` 自己的
-  守卫分支（`valid === false` 时直接 return，不发请求不弹提示）；②不假设校验结果，只断言
-  「空表单点了也不会建立登录态」。
-- **待办**：在真实浏览器点一次空表单确认。若确认是库缺陷，另行上报。
+`ElForm.validate()` → `validateField(void 0)` → `doValidateField([])` →
+`filterFields(fields, [])` 返回全部 2 个字段（`utils.mjs:35-38`）→ 逐个
+`await field.validate("")`。到这里都正常。断点在**字段抛出的那个值**：
+
+```
+ElFormItem.validate() 内部 doValidate(rules) 失败
+  → catch 里 `const { fields } = err`        ← err.fields 为 undefined
+  → return Promise.reject(undefined)          ← 失败信号丢在这里
+表单侧 catch (fields) 收到 undefined
+  → validationErrors = { ...validationErrors, ...undefined }   ← {...undefined} 合法 → {}
+  → Object.keys({}).length === 0 → return true                ← 失败被判成通过
+```
+
+「矛盾」的实质不是逻辑矛盾，而是 **`ElFormItem.validate()` reject 了一个 `undefined`**，
+让表单的 `{...undefined}` 累加器得到空对象、把失败误判成成功。
+
+支撑证据（逐条实测）：`fields.length = 2` 且类型是 `function`；包一层计数器确认循环**确实**调了这 2 个字段；
+每个字段单独调都 reject；但 `validateField([])` / `validate()` 均 `RESOLVED true`；
+`validateState` 卡在 `username:validating | password:validating`（成功/失败分支都没走到）；
+**rejection 的值是 `undefined`**（`typeof e === "undefined"`、`Object.keys(e)` 为空、`String(e) === "undefined"`）；
+而单独复刻 `doValidate` 时 `async-validator` 本身正常返回带 `fields` 的 `AsyncValidationError`，
+库自己的告警（`onValidationFailed`）也一次没打 —— 即**真实路径里到达 catch 的 `err` 不是同一个对象**。
+
+### 真实浏览器验证（决定性）
+
+本机已有 playwright 的 chromium 缓存，于是**不是靠推断，而是真的开了浏览器**：
+dev server `localhost:5173` + 真实 Chromium + Element Plus 2.14.3 + 生产代码，
+钩住 XHR 后点空表单「登录」：
+
+```
+reqs          = []                            ← 一个请求都没发
+inline-errors = ["请输入用户名","请输入密码"]   ← Element Plus 内联错误正常显示
+toasts        = []
+url           = /login
+```
+
+**与 jsdom 下的行为完全相反。** 即：
+
+- **生产代码没有任何问题** —— 空表单被正常拦住、零请求、两条内联错误、停在登录页；
+  业务代码一行都不用改。
+- 这个现象**只存在于 vitest + jsdom 环境**，是**测试环境的差异（测试假象）**，不是库缺陷也不是本仓缺陷。
+- 但它**确实是我原套件里一条失败测试的真实成因**，所以「需要处理」是对的 —— **要处理的是测试**。
+
+### 处置（已完成）
+
+1. 把「校验拦住表单」这类**断言第三方内部行为**的用例从套件移除 —— 它脆弱，且测的不是本仓代码。
+2. 改为两条只断言**本仓契约**的用例：①用「校验必然失败」的 `el-form` 替身，确定性验证 `Login.vue`
+   自己的守卫分支（`valid === false` 时直接 return，不发请求不弹提示）；②不假设校验结果，
+   只断言「空表单点了也不会建立登录态」。
+
+### 留给后人的一句话
+
+> 写 Element Plus 组件的测试时，**不要断言「表单校验会拦住提交」这类结果**——
+> 它在 jsdom 下不一定成立（本仓实测 `ElFormItem.validate()` 会 reject `undefined`，
+> 使表单把它当成通过）。要验这个分支，就用「校验必然失败」的替身组件去驱动，
+> 断言的是**本仓代码对结果的反应**，而不是库内部怎么判。
 
 ## 参考
 

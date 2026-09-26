@@ -846,3 +846,52 @@ AssertionError: expected '请求失败 (404)' to be '登录失败，请检查用
 **顺带修正了 JSDoc** —— 原注释只说「覆盖四种来源」，没写 `fallback` 何时生效；
 现在函数注释里明确写了「只在服务端返回 4xx 却没给可读消息时生效」。
 
+---
+
+## 40-A. ⚪ 排查后排除（**非缺陷**）：jsdom 下 `ElForm` 空表单校验「被当成通过」
+
+> 这一条**不是 bug、不改任何业务代码**，记在这里是因为它是对一个「看起来像缺陷」的现象
+> 的完整调查结论，且**以后写 Element Plus 组件测试的人一定会再碰到**。
+> 按编号加 `-A` 后缀，不占用缺陷序号。
+
+**现象** —— 在 vitest + jsdom 里，空表单点「登录」时：
+每个字段的 `validate("")` **都会 reject**，但 `ElForm` 级别的 `validate()` 却 **resolve `true`**，
+于是请求带着空用户名/密码发了出去。这与库源码 `doValidateField` 的逻辑相悖。
+
+**调查结论 —— 是测试环境差异，不是缺陷。** 根因锁定在**字段抛出的那个值**：
+
+```
+ElFormItem.validate() 内部 doValidate(rules) 失败
+  → catch 里 `const { fields } = err`        ← err.fields 为 undefined
+  → return Promise.reject(undefined)          ← 失败信号丢在这里
+表单侧 catch (fields) 收到 undefined
+  → validationErrors = { ...validationErrors, ...undefined }   ← {...undefined} 合法 → {}
+  → Object.keys({}).length === 0 → return true                ← 失败被判成通过
+```
+
+即「矛盾」的实质是 **`ElFormItem.validate()` reject 了一个 `undefined`**，
+让表单的 `{...undefined}` 累加器得到空对象、把失败误判成成功 —— 循环确实跑了、字段确实失败了，
+**失败信号在 `Promise.reject(err.fields)` 这一步丢了**。
+
+**决定性证据 —— 真开浏览器（不是推断）**：用本机已有的 playwright chromium，
+跑真实 Chromium + dev server + Element Plus 2.14.3 + 生产代码，钩住 XHR 后点空表单：
+
+| 观察 | jsdom | 真实 Chromium |
+|---|---|---|
+| 发出的请求 | `[POST /auth/login]`（参数为空串） | `[]`（**零请求**） |
+| 内联错误 | 无 | `["请输入用户名","请输入密码"]` |
+| 提交后 URL | 不变 | `/login`（停在登录页） |
+
+**真实浏览器里生产代码完全正常**，该行为**只存在于 jsdom**。
+
+**测试侧处置（已完成）** —— 移除「断言第三方内部行为」的脆弱用例（那种断言测的不是本仓代码），
+改为两条只断言**本仓契约**的用例：①用「校验必然失败」的 `el-form` 替身，确定性验证 `Login.vue`
+自己的守卫分支（`valid === false` 时直接 return，不发请求不弹提示）；②不假设校验结果，
+只断言「空表单点了也不会建立登录态」。
+
+**给以后的规矩** —— 写 Element Plus 组件的测试时，**不要断言「表单校验会拦住提交」这类结果**：
+它在 jsdom 下不一定成立。要验这个分支，就用「校验必然失败」的替身组件去驱动，
+断言的是**本仓代码对结果的反应**，而不是库内部怎么判。
+
+**详见** —— `docs/requirements/K9-frontend-testing.md` 的「一个已查清的 jsdom 差异」一节。
+
