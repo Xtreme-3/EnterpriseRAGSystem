@@ -60,8 +60,19 @@ class MockLLM(LLMProvider):
     _TITLE_RE = re.compile(r"^\d+(?:\.\d+)*\s*[一-鿿、，,。\- ]{1,16}$")
     # 去掉列表前缀（"- "、"1. "、"2.1 "等），保留句子正文
     _LIST_PREFIX = re.compile(r"^(?:[-*]+|\d+(?:\.\d+)*[.、])\s*")
+    # K3 来源头「（来源：xxx.pdf · 第 3 块）」：Generator 渲染的元信息，不是资料正文。
+    # 必须剥掉——它含数字（"第 3 块"），会被 _FACT_RE 当成事实句而污染答案。
+    # 不跨行匹配：靠行尾的 ） 定位，文件名里含 ） 也不会截错。
+    _SOURCE_HEADER = re.compile(r"^（来源：.*?）\n?")
 
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
+        """``system`` / ``max_tokens`` 本实现忽略。
+
+        Mock 不做语言组织，也就无所谓角色分离；但签名必须能吃下 ``system``，
+        否则接了真实 Generator 的调用在 mock 模式下会直接 TypeError。
+        """
         query, context_blocks = self._parse_prompt(prompt)
         if not context_blocks:
             return "资料库中未找到相关信息。"
@@ -118,8 +129,8 @@ class MockLLM(LLMProvider):
             out.append(s)
         return out
 
-    @staticmethod
-    def _parse_prompt(prompt: str) -> tuple[str, list[str]]:
+    @classmethod
+    def _parse_prompt(cls, prompt: str) -> tuple[str, list[str]]:
         """从 Generator 的 prompt 模板中提取 query 和上下文块。"""
         # 提取【用户问题】
         query_match = re.search(r"【用户问题】\s*\n(.+)", prompt)
@@ -134,5 +145,10 @@ class MockLLM(LLMProvider):
 
         blocks: list[str] = []
         for fm in re.finditer(r"\[\d+\]\s*(.+?)(?=\[\d+\]|$)", region, re.DOTALL):
-            blocks.append(fm.group(1).strip())
+            blocks.append(cls._strip_source_header(fm.group(1).strip()))
         return query, blocks
+
+    @classmethod
+    def _strip_source_header(cls, block: str) -> str:
+        """剥掉 K3 的来源头，只留资料正文（块级处理，不跨行）。"""
+        return cls._SOURCE_HEADER.sub("", block.strip())

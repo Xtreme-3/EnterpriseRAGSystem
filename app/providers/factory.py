@@ -175,7 +175,13 @@ def build_llm(settings: Settings | None = None) -> LLMProvider:
     if p == "mock":
         return MockLLM()
     base_url, api_key = _resolve_endpoint(s, p)
-    return OpenAICompatLLM(base_url=base_url, api_key=api_key, model=s.llm_model)
+    return OpenAICompatLLM(
+        base_url=base_url,
+        api_key=api_key,
+        model=s.llm_model,
+        temperature=s.llm_temperature,
+        max_tokens=s.llm_max_tokens,
+    )
 
 
 def build_reranker(settings: Settings | None = None) -> RerankProvider:

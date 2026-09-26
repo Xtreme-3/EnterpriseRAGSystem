@@ -59,11 +59,15 @@ DOC_TEXT = "出差住宿标准：一线城市每晚不超过六百元，其他�
 class SlowLLM(LLMProvider):
     """首 token 前阻塞 FIRST_TOKEN_DELAY，之后每 TOKEN_INTERVAL 吐一个 token。"""
 
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
         time.sleep(FIRST_TOKEN_DELAY)
         return "".join(ANSWER_TOKENS)
 
-    def stream(self, prompt: str, *, max_tokens: int = 1024) -> Iterator[str]:
+    def stream(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> Iterator[str]:
         time.sleep(FIRST_TOKEN_DELAY)
         for tok in ANSWER_TOKENS:
             time.sleep(TOKEN_INTERVAL)

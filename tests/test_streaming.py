@@ -49,11 +49,15 @@ class _StubLLM(LLMProvider):
         self.complete_calls = 0
         self.stream_calls = 0
 
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
         self.complete_calls += 1
         return "".join(self.tokens)
 
-    def stream(self, prompt: str, *, max_tokens: int = 1024) -> Iterator[str]:
+    def stream(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> Iterator[str]:
         self.stream_calls += 1
         for i, tok in enumerate(self.tokens):
             if self.boom_at is not None and i == self.boom_at:
@@ -122,7 +126,9 @@ def test_base_stream_default_yields_complete_once() -> None:
     """未覆写 stream 的实现：恰好产出一段，且等于 complete 的结果。"""
 
     class _Only(LLMProvider):
-        def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+        def complete(
+            self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        ) -> str:
             return "整段答案"
 
     assert list(_Only().stream("p")) == ["整段答案"]

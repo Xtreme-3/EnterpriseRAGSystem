@@ -4,11 +4,14 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 
 from openai import OpenAI
 
 from app.providers.base import EmbeddingProvider, LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # 各家 embedding 接口的单次请求条数上限（保守取值，循环分批）
 _EMBED_BATCH = 16
@@ -30,27 +33,76 @@ def _make_client(*, base_url: str, api_key: str) -> OpenAI:
 
 
 class OpenAICompatLLM(LLMProvider):
-    def __init__(self, *, base_url: str, api_key: str, model: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> None:
         self._client = _make_client(base_url=base_url, api_key=api_key)
         self._model = model
+        # 生成参数由配置注入（K3），不再硬编码在 _params 里
+        self._temperature = temperature
+        self._max_tokens = max_tokens
 
-    def _params(self, prompt: str, max_tokens: int, *, stream: bool) -> dict:
+    @staticmethod
+    def _messages(prompt: str, system: str | None) -> list[dict]:
+        """K3：system 作为首条 system 消息；传 None 退化单条 user（与改动前一致）。"""
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _params(
+        self, prompt: str, max_tokens: int | None, system: str | None, *, stream: bool
+    ) -> dict:
         """两种模式的公共请求参数，避免 complete/stream 漂移。"""
         return {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0.2,
+            "messages": self._messages(prompt, system),
+            "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
+            "temperature": self._temperature,
             "stream": stream,
         }
 
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
         resp = self._client.chat.completions.create(
-            **self._params(prompt, max_tokens, stream=False)
+            **self._params(prompt, max_tokens, system, stream=False)
         )
-        return resp.choices[0].message.content or ""
+        choice = resp.choices[0]
+        effective = self._max_tokens if max_tokens is None else max_tokens
+        self._warn_if_truncated(choice, resp, effective)
+        return choice.message.content or ""
 
-    def stream(self, prompt: str, *, max_tokens: int = 1024) -> Iterator[str]:
+    def _warn_if_truncated(self, choice: object, resp: object, max_tokens: int) -> None:
+        """答案被 max_tokens 砍断时留下告警（K3）。
+
+        推理模型（qwen3.8-flash 等）的 ``reasoning_tokens`` 与正文**共用**同一份
+        ``max_tokens`` 预算，预算不够时正文会被截在句子中间、甚至一个字都没有，
+        而 HTTP 依然是 200 —— 不告警就只能靠用户看到半截答案才发现。
+        """
+        if getattr(choice, "finish_reason", None) != "length":
+            return
+        usage = getattr(resp, "usage", None)
+        logger.warning(
+            "LLM 答案被 max_tokens 截断（finish_reason=length）：model=%s max_tokens=%s "
+            "completion_tokens=%s reasoning_tokens=%s。推理模型的 reasoning token 与正文"
+            "共用预算，建议调大 LLM_MAX_TOKENS。",
+            self._model,
+            max_tokens,
+            getattr(usage, "completion_tokens", None),
+            getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None),
+        )
+
+    def stream(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> Iterator[str]:
         """K1 真流式：逐 delta.content 产出增量文本。
 
         只取 ``delta.content``：推理模型（如 qwen3.8-flash）会先产 ``reasoning_content``，
@@ -58,7 +110,7 @@ class OpenAICompatLLM(LLMProvider):
         首包/末包可能出现 content 为 None 或空串的 chunk，统一跳过。
         """
         for chunk in self._client.chat.completions.create(
-            **self._params(prompt, max_tokens, stream=True)
+            **self._params(prompt, max_tokens, system, stream=True)
         ):
             choices = getattr(chunk, "choices", None)
             if not choices:

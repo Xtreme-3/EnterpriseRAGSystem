@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     llm_model: str = "qwen-plus"
     embedding_dim: int = 1024  # text-embedding-v3=1024；zhipu embedding-3=2048 时改这里
+    # 生成参数（K3）：原先硬编码在 OpenAICompatLLM._params 里。低温是为了让答案贴着资料，
+    # 减少编造；max_tokens 限制单次答案长度上限。
+    # ⚠️ max_tokens 是**含推理 token** 的总预算：qwen3.8-flash 这类推理模型会把
+    # reasoning_tokens 也算在里面（实测一问就吃 900+）。给 1024 时正文只剩 ~100 个 token，
+    # finish_reason=length，答案被截在句子中间甚至为空。故默认给 2048。
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 2048
 
     # ---- RAG 参数 ----
     chunk_size: int = 800

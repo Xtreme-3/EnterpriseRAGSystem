@@ -93,8 +93,13 @@ class RagPipeline:
         search_query = self.rewriter.rewrite(query, history)
         hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
         hits = self.reranker.rerank(search_query, hits, top_n=k)
-        answer = self.generator.generate(query, hits, history=history)
-        sources = self._build_sources(hits)
+        # K3：文档名必须在**生成之前**解析好——prompt 里要写出「（来源：xxx.pdf · 第 N 块）」，
+        # 模型才能引用具体文档。同一份映射顺带用于来源展示，全程只查一次库。
+        filenames = self._filename_map(hits)
+        answer = self.generator.generate(
+            query, hits, history=history, filenames=filenames
+        )
+        sources = self._build_sources(hits, filenames)
         return RagAnswer(query=query, answer=answer, sources=sources, rewritten_query=search_query)
 
     def ask_stream(
@@ -129,7 +134,8 @@ class RagPipeline:
         yield {"type": "stage", "stage": "reranking"}
         hits = self.reranker.rerank(search_query, hits, top_n=k)
 
-        sources = self._build_sources(hits)
+        filenames = self._filename_map(hits)
+        sources = self._build_sources(hits, filenames)
         yield {
             "type": "sources",
             "sources": sources,
@@ -138,7 +144,7 @@ class RagPipeline:
         }
 
         parts: list[str] = []
-        for token in self.generator.stream(query, hits, history=history):
+        for token in self.generator.stream(query, hits, history=history, filenames=filenames):
             parts.append(token)
             yield {"type": "token", "content": token}
 
@@ -149,27 +155,35 @@ class RagPipeline:
             "rewritten_query": search_query,
         }
 
-    def _build_sources(self, hits: list[ScoredChunk]) -> list[SourceRef]:
-        """检索命中 → 引用来源，并补齐文档名（ask / ask_stream 共用，避免两处漂移）。"""
-        sources = [
+    def _build_sources(
+        self, hits: list[ScoredChunk], filenames: dict[int, str] | None = None
+    ) -> list[SourceRef]:
+        """检索命中 → 引用来源（ask / ask_stream 共用，避免两处漂移）。
+
+        文档名由调用方传入（K3）：生成 prompt 与来源展示用的是**同一份**映射，
+        因此全程只查一次库，也不存在"prompt 里有名字、来源列表里没有"的错位。
+        """
+        fmap = filenames or {}
+        return [
             SourceRef(
                 document_id=c.document_id,
-                filename="",
+                filename=fmap.get(c.document_id, f"doc_{c.document_id}"),
                 chunk_index=c.chunk_index,
                 content=c.content,
                 score=c.score,
             )
             for c in hits
         ]
-        self._attach_filenames(sources)
-        return sources
 
-    def _attach_filenames(self, sources: list[SourceRef]) -> None:
-        doc_ids = {s.document_id for s in sources}
+    def _filename_map(self, hits: list[ScoredChunk]) -> dict[int, str]:
+        """命中切片 → {document_id: 文件名}。
+
+        K3 后必须在**生成之前**调用：prompt 里要渲染「（来源：文件名 · 第 N 块）」，
+        模型才能引用具体文档而不是笼统的"资料显示"。
+        """
+        doc_ids = {c.document_id for c in hits}
         if not doc_ids:
-            return
+            return {}
         with get_db(self.session_factory) as db:
             docs = db.query(Document).filter(Document.id.in_(doc_ids)).all()
-        filename_map = {d.id: d.filename for d in docs}
-        for s in sources:
-            s.filename = filename_map.get(s.document_id, f"doc_{s.document_id}")
+        return {d.id: d.filename for d in docs}

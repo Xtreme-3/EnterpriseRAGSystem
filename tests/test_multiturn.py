@@ -43,13 +43,17 @@ class _FakeLLM:
         self.output = output
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
         self.prompts.append(prompt)
         return self.output
 
 
 class _RaisingLLM:
-    def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+    ) -> str:
         raise RuntimeError("llm down")
 
 
