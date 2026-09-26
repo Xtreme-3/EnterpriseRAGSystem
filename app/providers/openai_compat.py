@@ -13,10 +13,25 @@ from app.providers.base import EmbeddingProvider, LLMProvider
 # 各家 embedding 接口的单次请求条数上限（保守取值，循环分批）
 _EMBED_BATCH = 16
 
+# K2：显式超时与重试。SDK 默认读超时为 600s 且重试次数不受限 —— 真模型挂住时
+# 请求会一直等下去（前端表现为"永远转圈"）。这里收敛为可预期的上限。
+_TIMEOUT_SECONDS = 60.0
+_MAX_RETRIES = 2
+
+
+def _make_client(*, base_url: str, api_key: str) -> OpenAI:
+    """统一构造 OpenAI 客户端：显式 timeout + 有界 max_retries（K2）。"""
+    return OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=_TIMEOUT_SECONDS,
+        max_retries=_MAX_RETRIES,
+    )
+
 
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, *, base_url: str, api_key: str, model: str) -> None:
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._client = _make_client(base_url=base_url, api_key=api_key)
         self._model = model
 
     def _params(self, prompt: str, max_tokens: int, *, stream: bool) -> dict:
@@ -55,7 +70,7 @@ class OpenAICompatLLM(LLMProvider):
 
 class OpenAICompatEmbedding(EmbeddingProvider):
     def __init__(self, *, base_url: str, api_key: str, model: str, dim: int) -> None:
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._client = _make_client(base_url=base_url, api_key=api_key)
         self._model = model
         self._dim = dim
 

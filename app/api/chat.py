@@ -17,12 +17,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_rag
 from app.api.kbs import _get_user_kb_or_403
-from app.config import get_settings
 from app.core.models import ChatMessage, Conversation, QaLog, User, utcnow
 from app.storage.db import get_db as open_db_session
-from app.storage.vector_store import build_vector_store
 
 logger = logging.getLogger("app.chat")
 
@@ -125,22 +123,6 @@ class QaLogOut(BaseModel):
 
 
 # ---- helpers ----
-
-def _build_rag(request: Request):
-    """复用 app.state 构建 RagPipeline。"""
-    from app.providers.factory import build_embedding, build_llm, build_reranker
-    from app.rag.pipeline import RagPipeline
-
-    settings = get_settings()
-    return RagPipeline(
-        settings=settings,
-        session_factory=request.app.state.session_factory,
-        vector_store=build_vector_store(settings),
-        embedding=build_embedding(settings),
-        llm=build_llm(settings),
-        reranker=build_reranker(settings),
-    )
-
 
 def _to_sources(sources: list) -> list[SourceRefOut]:
     return [
@@ -349,7 +331,7 @@ def ask(
         conv = _get_user_conversation(db, kb_id, req.conversation_id, current_user)
         history = _conversation_history(db, conv)
 
-    rag = _build_rag(request)
+    rag = get_rag(request)
     try:
         result = rag.ask(kb_id, req.query, mode=req.mode, history=history)
     except Exception:
@@ -411,7 +393,7 @@ def ask_stream(
     mode = req.mode
 
     try:
-        rag = _build_rag(request)
+        rag = get_rag(request)
     except Exception:
         logger.exception("构建 RAG 管线失败 kb_id=%s", kb_id)
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")

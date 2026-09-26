@@ -8,12 +8,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_rag
 from app.core.models import KnowledgeBase, KnowledgeBaseMember, User
 
 logger = logging.getLogger("app.kbs")
@@ -229,19 +229,16 @@ def get_kb(
 @router.delete("/{kb_id}")
 def delete_kb(
     kb_id: int,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     """删除知识库（级联删除文档+切片+向量）。仅 owner 可执行。"""
     kb = _get_user_kb_or_403(db, kb_id, current_user, required="owner")
 
-    # 删除向量集合
+    # 删除向量集合（K2：复用启动时装配的向量库，不新建连接）
     try:
-        from app.config import get_settings
-        from app.storage.vector_store import build_vector_store
-
-        vs = build_vector_store(get_settings())
-        vs.delete_collection(kb_id)
+        get_rag(request).vector_store.delete_collection(kb_id)
     except Exception:
         logger.exception("删除向量集合失败 kb_id=%s", kb_id)
 

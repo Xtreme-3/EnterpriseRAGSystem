@@ -4,11 +4,11 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_rag
 from app.api.kbs import _get_user_kb_or_403
 from app.core.models import Document, User
 
@@ -76,16 +76,16 @@ class DiagnosticsResponse(BaseModel):
 
 # ---- helpers ----
 
-def _check_consistency(kb_id: int, docs: list[Document]) -> Consistency:
-    """对比元数据 chunk_count 与向量库实际向量数，报告缺失/漂移/孤儿。"""
-    from app.config import get_settings
-    from app.storage.vector_store import build_vector_store
+def _check_consistency(kb_id: int, docs: list[Document], store) -> Consistency:
+    """对比元数据 chunk_count 与向量库实际向量数，报告缺失/漂移/孤儿。
 
+    ``store`` 由调用方传入 —— K2：复用 app.state.rag 的向量库实例，
+    不再每请求新建一个（那会重开 PG engine / 连接池）。
+    """
     meta_counts = {d.id: (d.chunk_count or 0) for d in docs}
     filenames = {d.id: d.filename for d in docs}
 
     try:
-        store = build_vector_store(get_settings())
         vector_counts = store.document_counts(kb_id)
     except Exception:
         # 向量库不可达时只置 checked=False，不拖垮体检接口
@@ -133,6 +133,7 @@ def _check_consistency(kb_id: int, docs: list[Document]) -> Consistency:
 @router.get("/{kb_id}/diagnostics", response_model=DiagnosticsResponse)
 def get_kb_diagnostics(
     kb_id: int,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DiagnosticsResponse:
@@ -193,5 +194,5 @@ def get_kb_diagnostics(
         ),
         failures=failures,
         anomalies=anomalies,
-        consistency=_check_consistency(kb_id, docs),
+        consistency=_check_consistency(kb_id, docs, get_rag(request).vector_store),
     )

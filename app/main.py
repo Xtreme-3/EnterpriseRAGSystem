@@ -41,11 +41,41 @@ logger.propagate = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """启动时初始化数据库（建元数据表）；失败快速失败，避免带病启动。"""
+    """启动时初始化数据库并**装配一次** RAG / 摄取管线（K2）。
+
+    构造失败即启动失败 —— 早暴露，避免带病启动。默认 mock + chroma 路径
+    在无 API Key、无 PostgreSQL 时也能正常启动（engine 是惰性的）。
+    """
     settings = get_settings()
     _, session_factory = init_db(settings)
+    app.state.settings = settings
     app.state.session_factory = session_factory
-    logger.info("数据库就绪（vector_store=%s）", settings.vector_store)
+
+    from app.ingestion.pipeline import IngestionPipeline
+    from app.providers.factory import build_embedding, build_llm, build_reranker
+    from app.rag.pipeline import RagPipeline
+    from app.storage.vector_store import build_vector_store
+
+    # 向量库与 embedding 只建一份：问答与摄取共用（同一 engine、同一 httpx 池）
+    vector_store = build_vector_store(settings)
+    embedding = build_embedding(settings)
+
+    app.state.rag = RagPipeline(
+        settings=settings,
+        session_factory=session_factory,
+        vector_store=vector_store,
+        embedding=embedding,
+        llm=build_llm(settings),
+        reranker=build_reranker(settings),
+    )
+    app.state.ingestion = IngestionPipeline(
+        settings=settings,
+        session_factory=session_factory,
+        vector_store=vector_store,
+        embedding=embedding,
+    )
+
+    logger.info("数据库就绪（vector_store=%s）；RAG 管线已装配一次", settings.vector_store)
     yield
 
 

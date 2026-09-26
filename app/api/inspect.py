@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_rag
 from app.api.kbs import _get_user_kb_or_403
 from app.config import get_settings
 from app.core.models import Document, User
@@ -64,6 +64,7 @@ class InspectResponse(BaseModel):
 def inspect_retrieval(
     kb_id: int,
     req: InspectRequest,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InspectResponse:
@@ -75,14 +76,13 @@ def inspect_retrieval(
     mode = req.mode or settings.retrieval_mode
     effective_rerank = req.rerank if req.rerank is not None else settings.rerank
 
-    from app.providers.factory import build_embedding, build_reranker
+    from app.providers.factory import build_reranker
     from app.rag.reranker import Reranker
-    from app.rag.retriever import Retriever
-    from app.storage.vector_store import build_vector_store
 
     try:
-        retriever = Retriever(build_vector_store(settings), build_embedding(settings), settings)
-        hits = retriever.retrieve(kb_id, req.query, k, mode=mode)
+        # K2：复用启动时装配的 retriever（内里是同一份 vector_store + embedding），
+        # 不再每请求新建 PG engine 与 httpx 连接池
+        hits = get_rag(request).retriever.retrieve(kb_id, req.query, k, mode=mode)
     except Exception:
         logger.exception("检索服务异常 kb_id=%s", kb_id)
         raise HTTPException(status_code=502, detail="检索服务暂时不可用")

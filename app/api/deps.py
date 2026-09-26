@@ -31,6 +31,32 @@ def get_db(request: Request) -> Generator[Session, None, None]:
         session.close()
 
 
+def get_rag(request: Request):
+    """取用启动时装配好的 RagPipeline 单例（K2）。
+
+    单例在 lifespan 里构造。若未触发 lifespan 就取用（例如没走 ``with`` 的
+    ``TestClient``），给出可读的 RuntimeError 而不是裸 AttributeError。
+    """
+    rag = getattr(request.app.state, "rag", None)
+    if rag is None:
+        raise RuntimeError(
+            "app.state.rag 未初始化：RagPipeline 在 lifespan 里装配，请确认应用已启动"
+            "（TestClient 需用 `with` 上下文触发 lifespan）。"
+        )
+    return rag
+
+
+def get_ingestion(request: Request):
+    """取用启动时装配好的 IngestionPipeline 单例（K2），与 RAG 共用向量库与 embedding。"""
+    ingestion = getattr(request.app.state, "ingestion", None)
+    if ingestion is None:
+        raise RuntimeError(
+            "app.state.ingestion 未初始化：IngestionPipeline 在 lifespan 里装配，"
+            "请确认应用已启动（TestClient 需用 `with` 上下文触发 lifespan）。"
+        )
+    return ingestion
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),

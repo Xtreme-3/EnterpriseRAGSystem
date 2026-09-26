@@ -64,11 +64,12 @@ class RagPipeline:
         from app.providers.factory import build_embedding, build_llm, build_reranker
         from app.storage.vector_store import build_vector_store
 
-        self.retriever = Retriever(
-            vector_store or build_vector_store(self.settings),
-            embedding or build_embedding(self.settings),
-            self.settings,
-        )
+        # K2：向量库与 embedding 挂成公开属性，供 lifespan 装配时与摄取链路共用
+        # （同一份 PG engine / 同一个 httpx 池，不重复建连接）
+        self.vector_store: VectorStore = vector_store or build_vector_store(self.settings)
+        self.embedding: EmbeddingProvider = embedding or build_embedding(self.settings)
+
+        self.retriever = Retriever(self.vector_store, self.embedding, self.settings)
         self.reranker = Reranker(reranker or build_reranker(self.settings))
         self.llm = llm or build_llm(self.settings)
         # J1 多轮：查询改写（mock 默认规则策略，配真模型自动升级 LLM 改写）

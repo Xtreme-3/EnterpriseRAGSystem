@@ -453,7 +453,8 @@ def test_api_stream_error_becomes_event(api: TestClient, monkeypatch) -> None:
             yield {"type": "stage", "stage": "rewriting"}
             raise RuntimeError("模拟模型中断")
 
-    monkeypatch.setattr("app.api.chat._build_rag", lambda request: _BoomRag())
+    # K2：管线改为启动时装配的单例，打桩点从 _build_rag 改为取用垫片 get_rag
+    monkeypatch.setattr("app.api.chat.get_rag", lambda request: _BoomRag())
 
     resp = api.post(f"/api/kbs/{kb_id}/ask/stream", json={"query": "随便问"},
                     headers=_auth(token))

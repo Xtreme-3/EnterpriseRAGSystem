@@ -31,11 +31,21 @@ class PgVectorStore(VectorStore):
 
     @property
     def engine(self):
-        """惰性创建 engine，避免 import 时就连数据库。"""
+        """惰性创建 engine，避免 import 时就连数据库。
+
+        K2：管线单例化后连接会被长期复用，必须显式配池 ——
+        ``pool_pre_ping=True`` 防止空闲过久拿到已被服务端掐断的死连接，
+        池上限则避免并发增长时无限开连接。
+        """
         if self._engine is None:
             from sqlalchemy import create_engine
 
-            self._engine = create_engine(self._settings.database_url)
+            self._engine = create_engine(
+                self._settings.database_url,
+                pool_size=5,
+                max_overflow=10,
+                pool_pre_ping=True,
+            )
         return self._engine
 
     def _ensure_ext(self, dim: int) -> None:

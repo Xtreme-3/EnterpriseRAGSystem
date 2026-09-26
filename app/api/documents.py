@@ -15,12 +15,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_ingestion
 from app.api.kbs import _get_user_kb_or_403
-from app.config import get_settings
 from app.core.models import Document, User
 from app.ingestion.parsers import SUPPORTED_EXTS
-from app.storage.vector_store import build_vector_store
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -40,22 +38,6 @@ class DocumentResponse(BaseModel):
     chunk_count: int
     created_at: datetime | None = None
     error: str | None = None
-
-
-# ---- helpers ----
-
-def _build_ingest(request: Request):
-    """从 app.state 复用已初始化的 session_factory，创建 IngestionPipeline。"""
-    from app.ingestion.pipeline import IngestionPipeline
-    from app.providers.factory import build_embedding
-
-    settings = get_settings()
-    return IngestionPipeline(
-        settings=settings,
-        session_factory=request.app.state.session_factory,
-        vector_store=build_vector_store(settings),
-        embedding=build_embedding(settings),
-    )
 
 
 # ---- B4: 上传 + 状态查询 ----
@@ -103,7 +85,7 @@ def upload_document(
 
     # 4. 摄取
     try:
-        ingest = _build_ingest(request)
+        ingest = get_ingestion(request)
         doc = ingest.ingest_file(kb_id, tmp_path, display_name=file.filename)
     except Exception:
         # 失败时也尝试清理临时文件
@@ -173,7 +155,7 @@ def delete_document(
 
     # 清理向量 + 元数据（pipeline 内部处理）
     try:
-        ingest = _build_ingest(request)
+        ingest = get_ingestion(request)
         ingest.delete_document(doc_id)
     except Exception:
         logger.exception("删除文档向量/元数据失败 doc_id=%s", doc_id)
