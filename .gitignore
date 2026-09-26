@@ -19,6 +19,9 @@ frontend/node_modules/
 frontend/dist/
 # Vite 加载配置文件时留下的临时文件
 frontend/vite.config.ts.timestamp-*.mjs
+# playwright-cli 的调试快照/配置（真浏览器复现时的副产物）
+frontend/.playwright-cli/
+playwright-cli.json
 
 # 编辑器/系统
 .vscode/
