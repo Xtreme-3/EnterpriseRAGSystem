@@ -62,12 +62,19 @@
         >
           <div class="chat-msg-role">{{ msg.role === "user" ? "你" : "AI" }}</div>
           <div class="chat-msg-content">
-            <div class="chat-msg-text">{{ msg.content }}</div>
+            <div v-if="msg.content" class="chat-msg-text">{{ msg.content }}</div>
+            <!-- K1 真流式：首个 token 到达前的阶段提示（改写 → 检索 → 重排 → 生成） -->
+            <div v-else-if="msg.streaming" class="chat-msg-stage">
+              {{ msg.stageText || "正在处理…" }}
+            </div>
+            <div v-if="msg.failed" class="chat-msg-failed">
+              {{ msg.failReason || "生成失败，请重试" }}
+            </div>
             <!-- 流式光标 -->
-            <span v-if="msg.streaming" class="chat-cursor">|</span>
+            <span v-if="msg.streaming && msg.content" class="chat-cursor">|</span>
 
-            <!-- 来源引用 -->
-            <div v-if="msg.sources.length > 0 && !msg.streaming" class="chat-sources">
+            <!-- 来源引用：K1 起 sources 事件先于答案到达，立即渲染，不必等流结束 -->
+            <div v-if="msg.sources.length > 0" class="chat-sources">
               <el-collapse>
                 <el-collapse-item :title="`引用来源（${msg.sources.length} 条）`">
                   <div v-for="src in msg.sources" :key="src.chunk_index" class="chat-source-item">
@@ -131,7 +138,20 @@ interface Message {
   content: string;
   sources: SourceRef[];
   streaming: boolean;
+  /** K1 真流式：首个 token 到达前显示的后端阶段文案 */
+  stageText?: string;
+  /** K1：流内 error 事件 / 请求异常导致的失败态 */
+  failed?: boolean;
+  failReason?: string;
 }
+
+/** K1：后端 stage 事件 → 用户可读的进度文案 */
+const STAGE_TEXT: Record<string, string> = {
+  rewriting: "正在改写问题…",
+  retrieving: "正在检索资料…",
+  reranking: "正在重排…",
+  generating: "正在组织答案…",
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -282,26 +302,44 @@ async function send() {
 
     for await (const event of parseSseStream(reader)) {
       if (event === "done") {
-        assistantMsg.streaming = false;
-        if (!assistantMsg.content) {
-          assistantMsg.content = "（未找到相关信息）";
-        }
+        // [DONE] 结束标记
         break;
       }
-      if (event.type === "token") {
-        assistantMsg.content += event.content;
-        scrollBottom();
+      if (event.type === "stage") {
+        // 首个 token 到达前显示后端阶段（改写 → 检索 → 重排 → 组织答案）
+        assistantMsg.stageText = STAGE_TEXT[event.stage] || "正在处理…";
       } else if (event.type === "sources") {
+        // K1 来源前置：答案还在生成时引用卡片已可见
         assistantMsg.sources = event.sources;
+        scrollBottom();
+      } else if (event.type === "token") {
+        assistantMsg.content += event.content;
+        assistantMsg.stageText = "";
+        scrollBottom();
+      } else if (event.type === "done") {
+        // K1：用后端完整答案校准累积的 token，避免丢包导致半条答案
+        if (event.answer) assistantMsg.content = event.answer;
+        assistantMsg.stageText = "";
+      } else if (event.type === "error") {
+        assistantMsg.stageText = "";
+        assistantMsg.failed = true;
+        assistantMsg.failReason = event.message || "生成失败，请重试";
+        errorMsg.value = assistantMsg.failReason;
       }
+    }
+    assistantMsg.streaming = false;
+    if (!assistantMsg.content && !assistantMsg.failed) {
+      assistantMsg.content = "（未找到相关信息）";
     }
   } catch (err: any) {
     assistantMsg.streaming = false;
+    assistantMsg.failed = true;
     if (!assistantMsg.content) {
       assistantMsg.content = "（请求失败）";
     }
     errorMsg.value = err.message || "连接失败，请稍后重试";
   } finally {
+    assistantMsg.streaming = false;
     sending.value = false;
     scrollBottom();
   }
@@ -516,6 +554,31 @@ onUnmounted(() => {
   animation: blink 1s infinite;
   color: var(--el-color-primary);
   font-weight: 700;
+}
+
+/* K1 真流式：首个 token 到达前的阶段提示 */
+.chat-msg-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #909399;
+}
+
+.chat-msg-stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  animation: blink 1s infinite;
+}
+
+/* K1：流内 error 事件 / 请求异常的失败提示 */
+.chat-msg-failed {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #f56c6c;
 }
 
 @keyframes blink {

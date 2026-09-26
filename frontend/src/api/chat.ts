@@ -28,15 +28,39 @@ export interface SseToken {
   content: string;
 }
 
+/** K1 真流式：链路阶段事件，用于进度提示（改写 → 检索 → 重排 → 生成） */
+export type StreamStage = "rewriting" | "retrieving" | "reranking" | "generating";
+
+export interface SseStage {
+  type: "stage";
+  stage: StreamStage;
+}
+
 export interface SseSources {
   type: "sources";
   sources: SourceRef[];
   rewritten_query?: string;
   /** J2 会话持久化：本轮消息归属的会话 id（无会话为 null） */
   conversation_id?: number | null;
+  /** K1：来源事件即代表已进入生成阶段 */
+  stage?: StreamStage;
 }
 
-export type SseEvent = SseToken | SseSources;
+/** K1：生成期错误（流已开始，无法再用 HTTP 状态码表达） */
+export interface SseError {
+  type: "error";
+  message: string;
+}
+
+/** K1：生成结束，携带完整答案（前端可据此校准累积的 token） */
+export interface SseDone {
+  type: "done";
+  answer: string;
+  rewritten_query?: string;
+  conversation_id?: number | null;
+}
+
+export type SseEvent = SseToken | SseSources | SseStage | SseError | SseDone;
 
 // ---- J2 会话 ----
 
@@ -78,7 +102,9 @@ export const conversationApi = {
 
 /**
  * SSE 流式问答：返回 ReadableStream，调用方自行解析。
- * V1 客户端分片效果等同于 LLM 流式输出。
+ * K1 起为真流式：后端逐 token 下发，事件序列
+ * stage(rewriting→retrieving→reranking) → sources → token* → done → [DONE]，
+ * 生成期异常以 error 事件下发（HTTP 状态码此时已是 200）。
  * 支持 AbortSignal 用于组件卸载时取消请求。
  * J2：带 conversationId 时服务端从库内历史推导多轮上下文并落库本轮消息，
  * 前端不再携带 history；不带时维持 J1 行为（前端传 history，完全向后兼容）。

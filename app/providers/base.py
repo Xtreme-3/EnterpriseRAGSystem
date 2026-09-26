@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 
 
 class EmbeddingProvider(ABC):
@@ -26,6 +27,15 @@ class LLMProvider(ABC):
     @abstractmethod
     def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
         """单轮补全，返回完整文本。"""
+
+    def stream(self, prompt: str, *, max_tokens: int = 1024) -> Iterator[str]:
+        """逐段产出增量文本（K1 真流式）。
+
+        默认实现等于「完整生成后一次性 yield」，因此**未覆写本方法的实现
+        （如 MockLLM）行为与改动前完全一致**——离线与已有测试零回归。
+        支持流式的实现应覆写本方法（见 OpenAICompatLLM.stream）。
+        """
+        yield self.complete(prompt, max_tokens=max_tokens)
 
 
 class RerankProvider(ABC):

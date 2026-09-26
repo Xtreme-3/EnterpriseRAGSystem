@@ -1,6 +1,10 @@
-"""RAG 编排：query → (rewrite) → retrieve → rerank → generate → 结构化答案 + 引用来源。"""
+"""RAG 编排：query → (rewrite) → retrieve → rerank → generate → 结构化答案 + 引用来源。
+
+K1 真流式：新增 ``ask_stream()`` 事件化生成器，与 ``ask()`` 并存（后者行为零改动）。
+"""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy.orm import sessionmaker
@@ -89,6 +93,63 @@ class RagPipeline:
         hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
         hits = self.reranker.rerank(search_query, hits, top_n=k)
         answer = self.generator.generate(query, hits, history=history)
+        sources = self._build_sources(hits)
+        return RagAnswer(query=query, answer=answer, sources=sources, rewritten_query=search_query)
+
+    def ask_stream(
+        self,
+        kb_id: int,
+        query: str,
+        top_k: int | None = None,
+        mode: str | None = None,
+        history: list | None = None,
+    ) -> Iterator[dict]:
+        """K1 真流式：把整条链路事件化产出，供 SSE 逐事件下发。
+
+        事件契约（``type`` 取值）：
+        - ``{"type": "stage",   "stage": "rewriting"|"retrieving"|"reranking"}``
+        - ``{"type": "sources", "sources": [SourceRef], "rewritten_query": str, "stage": "generating"}``
+        - ``{"type": "token",   "content": str}``
+        - ``{"type": "done",    "answer": str, "sources": [SourceRef], "rewritten_query": str}``
+
+        ``sources`` 在第一个 ``token`` **之前**推出：检索与重排此时已完成，来源是确定的，
+        用户不必等答案吐完就能看到引用。
+        ``done`` 携带完整答案与完整 sources（非截断），调用方收到它之后才落库。
+        ``ask()``（非流式）不受影响。
+        """
+        k = top_k or self.settings.top_k
+
+        yield {"type": "stage", "stage": "rewriting"}
+        search_query = self.rewriter.rewrite(query, history)
+
+        yield {"type": "stage", "stage": "retrieving"}
+        hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
+
+        yield {"type": "stage", "stage": "reranking"}
+        hits = self.reranker.rerank(search_query, hits, top_n=k)
+
+        sources = self._build_sources(hits)
+        yield {
+            "type": "sources",
+            "sources": sources,
+            "rewritten_query": search_query,
+            "stage": "generating",
+        }
+
+        parts: list[str] = []
+        for token in self.generator.stream(query, hits, history=history):
+            parts.append(token)
+            yield {"type": "token", "content": token}
+
+        yield {
+            "type": "done",
+            "answer": "".join(parts),
+            "sources": sources,
+            "rewritten_query": search_query,
+        }
+
+    def _build_sources(self, hits: list[ScoredChunk]) -> list[SourceRef]:
+        """检索命中 → 引用来源，并补齐文档名（ask / ask_stream 共用，避免两处漂移）。"""
         sources = [
             SourceRef(
                 document_id=c.document_id,
@@ -100,7 +161,7 @@ class RagPipeline:
             for c in hits
         ]
         self._attach_filenames(sources)
-        return RagAnswer(query=query, answer=answer, sources=sources, rewritten_query=search_query)
+        return sources
 
     def _attach_filenames(self, sources: list[SourceRef]) -> None:
         doc_ids = {s.document_id for s in sources}

@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from openai import OpenAI
 
 from app.providers.base import EmbeddingProvider, LLMProvider
@@ -17,14 +19,38 @@ class OpenAICompatLLM(LLMProvider):
         self._client = OpenAI(base_url=base_url, api_key=api_key)
         self._model = model
 
+    def _params(self, prompt: str, max_tokens: int, *, stream: bool) -> dict:
+        """两种模式的公共请求参数，避免 complete/stream 漂移。"""
+        return {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+            "stream": stream,
+        }
+
     def complete(self, prompt: str, *, max_tokens: int = 1024) -> str:
         resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.2,
+            **self._params(prompt, max_tokens, stream=False)
         )
         return resp.choices[0].message.content or ""
+
+    def stream(self, prompt: str, *, max_tokens: int = 1024) -> Iterator[str]:
+        """K1 真流式：逐 delta.content 产出增量文本。
+
+        只取 ``delta.content``：推理模型（如 qwen3.8-flash）会先产 ``reasoning_content``，
+        那段思考内容不下发给用户，由前端"正在组织答案…"阶段兜住这段静默期。
+        首包/末包可能出现 content 为 None 或空串的 chunk，统一跳过。
+        """
+        for chunk in self._client.chat.completions.create(
+            **self._params(prompt, max_tokens, stream=True)
+        ):
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            content = getattr(getattr(choices[0], "delta", None), "content", None)
+            if content:
+                yield content
 
 
 class OpenAICompatEmbedding(EmbeddingProvider):

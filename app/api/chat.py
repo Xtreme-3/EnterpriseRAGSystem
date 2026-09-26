@@ -1,5 +1,6 @@
 """流式问答 + 溯源 API（B6）：非流式 / SSE 流式双模式，返回答案 + 引用来源。
 G4：成功问答写 QaLog 日志，并提供历史查询接口。
+K1：/ask/stream 改为真流式（逐 token 下发，来源前置，落库后置）。
 
 所有接口需要登录。提问的知识库必须属于当前用户。
 """
@@ -8,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Generator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -19,6 +21,7 @@ from app.api.deps import get_current_user, get_db
 from app.api.kbs import _get_user_kb_or_403
 from app.config import get_settings
 from app.core.models import ChatMessage, Conversation, QaLog, User, utcnow
+from app.storage.db import get_db as open_db_session
 from app.storage.vector_store import build_vector_store
 
 logger = logging.getLogger("app.chat")
@@ -189,8 +192,8 @@ def _parse_sources(raw: str) -> list[dict]:
         return []
 
 
-def _sources_json(result) -> str:
-    """把 RagAnswer.sources 序列化为消息落库 JSON。"""
+def _sources_json(sources: list) -> str:
+    """把 sources 列表序列化为消息落库 JSON（保留完整正文）。"""
     return json.dumps(
         [
             {
@@ -199,10 +202,23 @@ def _sources_json(result) -> str:
                 "content": s.content,
                 "score": round(s.score, 4),
             }
-            for s in result.sources
+            for s in sources
         ],
         ensure_ascii=False,
     )
+
+
+def _sse_sources(sources: list) -> list[dict]:
+    """SSE 下发的来源（正文截断 200 字，减小单条事件体积）。"""
+    return [
+        {
+            "filename": s.filename,
+            "chunk_index": s.chunk_index,
+            "content": s.content[:200],
+            "score": round(s.score, 4),
+        }
+        for s in sources
+    ]
 
 
 def _get_user_conversation(db: Session, kb_id: int, conv_id: int, user: User) -> Conversation:
@@ -251,6 +267,64 @@ def _touch_conversation(db: Session, conv: Conversation, query: str) -> None:
         conv.title = query[:30]
 
 
+def _freeze_history(history: list | None) -> list[SimpleNamespace] | None:
+    """把历史轮次物化成脱离 ORM 会话的轻量对象。
+
+    K1：流式生成器在 Starlette 的线程池里执行，不能依赖请求期 Session 的实例状态，
+    因此在进入生成器之前先把 ``role``/``content`` 取出来。
+    """
+    if not history:
+        return None
+    return [
+        SimpleNamespace(role=getattr(t, "role", ""), content=getattr(t, "content", ""))
+        for t in history
+    ]
+
+
+def _persist_stream_result(
+    session_factory,
+    *,
+    user_id: int,
+    kb_id: int,
+    query: str,
+    answer: str,
+    sources: list,
+    rewritten_query: str,
+    conv_id: int | None,
+) -> None:
+    """K1 落库后置：答案完整（收到 done）后写 QaLog 与会话消息。
+
+    - 另开一个数据库会话，与请求期 Session 解耦（生成器在线程池里跑）。
+    - 失败只记日志，不影响已经下发给用户的答案。
+    - 顺序与 ``ask()`` 一致：user 消息 → assistant 消息 → 更新会话活跃时间。
+    """
+    try:
+        with open_db_session(session_factory) as db:
+            doc_ids = sorted({s.document_id for s in sources})
+            db.add(
+                QaLog(
+                    user_id=user_id,
+                    kb_id=kb_id,
+                    query=query,
+                    answer=answer,
+                    hit_doc_ids=json.dumps(doc_ids, ensure_ascii=False),
+                    hit_count=len(doc_ids),
+                )
+            )
+
+            if conv_id is not None:
+                conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+                if conv is not None:
+                    _save_turn(db, conv, "user", query)
+                    _save_turn(
+                        db, conv, "assistant", answer,
+                        sources=_sources_json(sources), rewritten_query=rewritten_query,
+                    )
+                    _touch_conversation(db, conv, query)
+    except Exception:
+        logger.exception("流式问答落库失败 kb_id=%s", kb_id)
+
+
 # ---- B6-1: 非流式问答 ----
 
 
@@ -286,7 +360,7 @@ def ask(
     if conv is not None:
         _save_turn(db, conv, "user", req.query)
         _save_turn(db, conv, "assistant", result.answer,
-                   sources=_sources_json(result), rewritten_query=result.rewritten_query)
+                   sources=_sources_json(result.sources), rewritten_query=result.rewritten_query)
         _touch_conversation(db, conv, req.query)
 
     return AskResponse(
@@ -309,7 +383,17 @@ def ask_stream(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """向知识库提问，SSE 流式返回答案 + 最终来源。J2：支持会话落库（同 ask）。"""
+    """向知识库提问，SSE **真流式**返回（K1）。
+
+    事件序列：``stage(rewriting)`` → ``stage(retrieving)`` → ``stage(reranking)``
+    → ``sources``（含 ``stage=generating``）→ ``token``* → ``done`` → ``data: [DONE]``。
+
+    与 K1 之前的关键差别：
+    - **不再先同步跑完整个 ask()**：第一字节不再等整段答案生成（真模型下 3–10 秒 → 亚秒级）。
+    - **来源前置**：检索/重排完成即下发 sources，用户在答案打字过程中就能看到引用。
+    - **错误事件化**：流一旦开始就无法再改 HTTP 状态码，生成期异常以 ``error`` 事件下发。
+    - **落库后置**：QaLog 与会话消息在收到 ``done`` 之后才写，避免落一条空答案。
+    """
     _get_user_kb_or_403(db, kb_id, current_user)
 
     conv = None
@@ -318,41 +402,78 @@ def ask_stream(
         conv = _get_user_conversation(db, kb_id, req.conversation_id, current_user)
         history = _conversation_history(db, conv)
 
-    rag = _build_rag(request)
+    # 进入生成器前把依赖请求期会话的东西取成纯数据
+    history = _freeze_history(history)
+    conv_id = conv.id if conv else None
+    user_id = current_user.id
+    session_factory = request.app.state.session_factory
+    query = req.query
+    mode = req.mode
+
     try:
-        result = rag.ask(kb_id, req.query, mode=req.mode, history=history)
+        rag = _build_rag(request)
     except Exception:
+        logger.exception("构建 RAG 管线失败 kb_id=%s", kb_id)
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
-    _log_qa(db, current_user, kb_id, result)
-
-    if conv is not None:
-        _save_turn(db, conv, "user", req.query)
-        _save_turn(db, conv, "assistant", result.answer,
-                   sources=_sources_json(result), rewritten_query=result.rewritten_query)
-        _touch_conversation(db, conv, req.query)
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     def event_stream() -> Generator[str, None, None]:
-        """逐字符流式推送答案（V1：完整生成后分片模拟，效果等效）。"""
-        # 逐 token 推送答案
-        chunk_size = 3
-        for i in range(0, len(result.answer), chunk_size):
-            token = result.answer[i : i + chunk_size]
-            yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+        answer = ""
+        sources: list = []
+        rewritten_query = ""
+        try:
+            for evt in rag.ask_stream(kb_id, query, mode=mode, history=history):
+                etype = evt.get("type")
 
-        # 推送来源（含改写问句与会话 id，便于多轮调试）
-        sources_data = [
-            {
-                "filename": s.filename,
-                "chunk_index": s.chunk_index,
-                "content": s.content[:200],
-                "score": round(s.score, 4),
-            }
-            for s in result.sources
-        ]
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_data, 'rewritten_query': result.rewritten_query, 'conversation_id': conv.id if conv else None}, ensure_ascii=False)}\n\n"
+                if etype == "stage":
+                    # 心跳：每个阶段前发一行 SSE 注释，维持网关/浏览器连接活性
+                    yield ": ping\n\n"
+                    yield sse({"type": "stage", "stage": evt["stage"]})
 
-        # 结束
+                elif etype == "sources":
+                    sources = evt.get("sources") or []
+                    rewritten_query = evt.get("rewritten_query", "")
+                    yield ": ping\n\n"
+                    yield sse({
+                        "type": "sources",
+                        "sources": _sse_sources(sources),
+                        "rewritten_query": rewritten_query,
+                        "conversation_id": conv_id,
+                        "stage": evt.get("stage", "generating"),
+                    })
+
+                elif etype == "token":
+                    yield sse({"type": "token", "content": evt["content"]})
+
+                elif etype == "done":
+                    answer = evt.get("answer", "")
+                    sources = evt.get("sources") or sources
+                    rewritten_query = evt.get("rewritten_query", rewritten_query)
+                    # ★ 落库后置：答案已完整，此时才写日志与会话消息
+                    _persist_stream_result(
+                        session_factory,
+                        user_id=user_id,
+                        kb_id=kb_id,
+                        query=query,
+                        answer=answer,
+                        sources=sources,
+                        rewritten_query=rewritten_query,
+                        conv_id=conv_id,
+                    )
+                    yield sse({
+                        "type": "done",
+                        "answer": answer,
+                        "rewritten_query": rewritten_query,
+                        "conversation_id": conv_id,
+                    })
+
+        except Exception:
+            logger.exception("流式问答失败 kb_id=%s", kb_id)
+            yield sse({"type": "error", "message": "问答服务暂时不可用"})
+
+        # 兼容旧前端：保留结束标记
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

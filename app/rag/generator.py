@@ -5,8 +5,13 @@ J1 多轮对话：可选注入【对话历史】块（在【资料】之前）�
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from app.providers.base import LLMProvider
 from app.storage.vector_store import ScoredChunk
+
+# 检索为空时的固定答复（非流式 generate 与流式 stream 共用同一文案，避免两处漂移）
+NO_HIT_ANSWER = "资料库中未找到相关信息。"
 
 PROMPT_TEMPLATE = """你是企业内部知识库问答助手。请仅依据下面提供的资料回答用户的问题。
 
@@ -46,5 +51,17 @@ class Generator:
 
     def generate(self, query: str, chunks: list[ScoredChunk], history: list | None = None) -> str:
         if not chunks:
-            return "资料库中未找到相关信息。"
+            return NO_HIT_ANSWER
         return self._llm.complete(self.build_prompt(query, chunks, history=history))
+
+    def stream(
+        self, query: str, chunks: list[ScoredChunk], history: list | None = None
+    ) -> Iterator[str]:
+        """K1 真流式：逐段产出答案增量。
+
+        检索为空时**不调用大模型**，直接产出固定文案（与 generate 同文案）。
+        """
+        if not chunks:
+            yield NO_HIT_ANSWER
+            return
+        yield from self._llm.stream(self.build_prompt(query, chunks, history=history))
