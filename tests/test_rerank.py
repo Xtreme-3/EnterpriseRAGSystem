@@ -8,6 +8,7 @@ import pytest
 
 from app.config import Settings
 from app.providers.factory import (
+    DashScopeRerank,
     MockRerank,
     NoopRerank,
     OpenAICompatRerank,
@@ -129,4 +130,40 @@ def test_build_reranker_real_returns_openai_compat(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
     r = build_reranker(Settings(_env_file=None, rag_provider="dashscope", rerank=True))
     assert isinstance(r, OpenAICompatRerank)
-    assert r._model == "gte-rerank"  # 默认模型
+    assert r._model == "gte-rerank-v2"  # 默认模型（百炼原生端点实测可用）
+
+
+# ---- DashScopeRerank：百炼原生端点（K0） ----
+#
+# 实测：百炼的 rerank **不在** compatible-mode 下（{base_url}/rerank 返回 404），
+# 必须走原生端点，且响应结构是 output.results（不是顶层 results）。
+
+
+def test_dashscope_rerank_endpoint_derived_from_compatible_base() -> None:
+    r = DashScopeRerank(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="k",
+        model="gte-rerank-v2",
+    )
+    assert r._endpoint == (
+        "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    )
+
+
+def test_dashscope_rerank_parse_output_results() -> None:
+    """results 嵌在 output 下——直接读顶层会永远拿到全 0 分。"""
+    payload = {
+        "output": {
+            "results": [
+                {"index": 2, "relevance_score": 0.3},
+                {"index": 0, "relevance_score": 0.9},
+                {"index": 1, "relevance_score": 0.6},
+            ]
+        }
+    }
+    assert DashScopeRerank._parse(payload, n=3) == [0.9, 0.6, 0.3]
+
+
+def test_dashscope_rerank_parse_missing_output_defaults_zero() -> None:
+    assert DashScopeRerank._parse({}, n=2) == [0.0, 0.0]
+    assert DashScopeRerank._parse({"output": {"results": None}}, n=2) == [0.0, 0.0]

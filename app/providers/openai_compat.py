@@ -87,4 +87,23 @@ class OpenAICompatEmbedding(EmbeddingProvider):
             resp = self._client.embeddings.create(model=self._model, input=batch)
             ordered = sorted(resp.data, key=lambda d: d.index)
             vectors.extend(item.embedding for item in ordered)
+        self._assert_dim(vectors)
         return vectors
+
+    def _assert_dim(self, vectors: list[list[float]]) -> None:
+        """维度自检（K0）：模型返回维度与 EMBEDDING_DIM 不符时立刻报错。
+
+        本类**不传** ``dimensions`` 参数（依赖模型默认维度），原先也不校验返回值，
+        于是模型默认维度与配置不一致时会静默写出错误长度的向量——表现为
+        "检索查得到但永远不相关"，或向量库抛底层异常，极难定位。
+        """
+        if not vectors:
+            return
+        actual = len(vectors[0])
+        if actual != self._dim:
+            raise ValueError(
+                f"embedding 维度不一致：模型 {self._model} 返回 {actual} 维，"
+                f"但配置 EMBEDDING_DIM={self._dim}。"
+                f"请将 EMBEDDING_DIM 改为 {actual}（或换用支持 {self._dim} 维的模型）；"
+                f"注意换维度后原向量集合不可再用，必须重建并重新导入文档。"
+            )

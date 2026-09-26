@@ -23,12 +23,21 @@ class Settings(BaseSettings):
 
     # 插槽级覆盖（留空 = 跟随 rag_provider）。场景：LLM 走中转站 A（只有对话模型），
     # embedding 走另一家或本地 mock。三插槽本就独立，这里只是把"可分别配置"暴露出来。
-    embedding_provider: str = ""  # dashscope | zhipu | mock，空=跟随 rag_provider
-    llm_provider: str = ""        # dashscope | zhipu | mock，空=跟随 rag_provider
+    embedding_provider: str = ""  # dashscope | zhipu | bailian | mock，空=跟随 rag_provider
+    llm_provider: str = ""        # dashscope | zhipu | bailian | mock，空=跟随 rag_provider
+    # 重排供应商（I1，K0 补）：留空 = 跟随 llm_provider → rag_provider（与旧行为一致）。
+    # 单开这个字段的理由：embedding 与 LLM 可能分属不同家，而重排该跟**向量空间更近**的那家走，
+    # 不能硬绑在 LLM 槽位上（LLM 在中转站、embedding 在百炼时，绑 LLM 会把重排打到 404）。
+    rerank_provider: str = ""     # dashscope | zhipu | bailian | mock，空=跟随 llm_provider
 
     # DashScope（通义千问）
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 阿里云百炼官方（Model Studio）—— https://bailian.console.aliyun.com/
+    # 与上面的 dashscope 槽位分开：本项目的 dashscope 槽位历史指向第三方中转站
+    # tokenrhythm.studio，两者共用一个 base_url 会把 LLM 一起拽到百炼官方端点上。
+    bailian_api_key: str = ""
+    bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # 智谱 GLM
     zhipu_api_key: str = ""
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
@@ -51,8 +60,9 @@ class Settings(BaseSettings):
     # 重排（I1）：true 启用——检索后按重排模型/词重叠重排候选，替换检索分作为命中分。
     # 默认 false（不引入额外延迟/成本，检索排序与分数完全不变）。
     rerank: bool = False
-    # 真实重排模型名（DashScope gte-rerank 等，走 {base_url}/rerank）
-    rerank_model: str = "gte-rerank"
+    # 真实重排模型名。百炼走原生端点（实测 gte-rerank-v2 / qwen3-rerank 可用）；
+    # 其他供应商走 {base_url}/rerank（OpenAI 兼容）。
+    rerank_model: str = "gte-rerank-v2"
     # 切块策略（H2 语义切分）：fixed（定长递归，默认，回归兜底）| structure（结构优先语义切分）
     # | structure+semantic（结构 + 句级 embedding 微调，需真实 embedding 才有意义）
     chunk_strategy: str = "fixed"

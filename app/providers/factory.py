@@ -1,6 +1,8 @@
 """按配置装配模型供应商。业务代码只调用本模块，不直接 new 具体实现。"""
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import httpx
 
 from app.config import Settings, get_settings
@@ -9,6 +11,9 @@ from app.providers.mock import MockEmbedding, MockLLM
 from app.providers.openai_compat import OpenAICompatEmbedding, OpenAICompatLLM
 
 _RERANK_TIMEOUT = 30.0
+
+# 百炼原生 rerank 端点。**不在** compatible-mode 下：实测 {base_url}/rerank 返回 404。
+_DASHSCOPE_RERANK_PATH = "/api/v1/services/rerank/text-rerank/text-rerank"
 
 
 class NoopRerank(RerankProvider):
@@ -76,15 +81,69 @@ class OpenAICompatRerank(RerankProvider):
         return scores
 
 
+class DashScopeRerank(RerankProvider):
+    """百炼官方重排：走 DashScope **原生**端点，不是 OpenAI 兼容模式。
+
+    为什么不复用 ``OpenAICompatRerank``（K0 实测结论）：
+
+    - 百炼的 rerank 没有 OpenAI 兼容入口，``{base_url}/rerank`` 直接 **404**；
+    - 原生端点路径与兼容模式不同（``/api/v1/services/rerank/...``，站点根下而非 ``/v1`` 下）；
+    - 原生入参是 ``{"input": {"query", "documents"}}``，且 results 嵌在 ``output`` 下。
+
+    实测模型：``gte-rerank-v2`` / ``qwen3-rerank`` 均可用（各有 100 万 token 免费额度）。
+    """
+
+    def __init__(self, *, base_url: str, api_key: str, model: str) -> None:
+        # base_url 配的是 compatible-mode 端点，这里退到站点根再拼原生路径
+        parsed = urlparse(base_url)
+        self._endpoint = f"{parsed.scheme}://{parsed.netloc}{_DASHSCOPE_RERANK_PATH}"
+        self._api_key = api_key
+        self._model = model
+
+    def rerank(self, query: str, texts: list[str], scores: list[float]) -> list[float]:
+        if not texts:
+            return []
+        resp = httpx.post(
+            self._endpoint,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={
+                "model": self._model,
+                "input": {"query": query, "documents": texts},
+                # top_n 必须给足候选数：小于候选数时只回前 N 条，其余候选拿不到分
+                "parameters": {"return_documents": False, "top_n": len(texts)},
+            },
+            timeout=_RERANK_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return self._parse(resp.json(), n=len(texts))
+
+    @staticmethod
+    def _parse(payload: dict, *, n: int) -> list[float]:
+        """按 ``output.results[].index`` 对齐返回 n 条重排分；缺字段兜底，不 500。"""
+        results = (payload.get("output") or {}).get("results") or []
+        out: list[float] = [0.0] * n
+        for r in results:
+            idx = int(r.get("index", 0))
+            if not (0 <= idx < n):
+                continue
+            out[idx] = float(r.get("relevance_score", r.get("score", 0.0)))
+        return out
+
+
 def _resolve_endpoint(settings: Settings, provider: str | None = None) -> tuple[str, str]:
     """按供应商名返回 (base_url, api_key)，key 为空时给出明确提示。
 
     ``provider`` 缺省时用 settings.rag_provider；插槽级覆盖（embedding_provider /
-    llm_provider）由各 build_* 自行决定传入值。
+    llm_provider / rerank_provider）由各 build_* 自行决定传入值。
+
+    供应商名互不复用：``dashscope`` 在本项目里历史指向第三方中转站，
+    ``bailian`` 才是阿里云百炼官方端点，两者 base_url 不同，故并列存在。
     """
     p = provider or settings.rag_provider
     if p == "dashscope":
         base_url, api_key = settings.dashscope_base_url, settings.dashscope_api_key
+    elif p == "bailian":
+        base_url, api_key = settings.bailian_base_url, settings.bailian_api_key
     elif p == "zhipu":
         base_url, api_key = settings.zhipu_base_url, settings.zhipu_api_key
     else:
@@ -124,13 +183,20 @@ def build_reranker(settings: Settings | None = None) -> RerankProvider:
 
     - ``rerank=False``（默认）→ NoopRerank：排序与分数完全不变（回归 0 影响）
     - ``mock`` 供应商 → MockRerank：离线词重叠重排，确定性可测
-    - 真实供应商 → OpenAICompatRerank（DashScope gte-rerank 等，走 {base_url}/rerank）
+    - ``bailian`` → DashScopeRerank：百炼**原生**端点（compatible 下没有 rerank，会 404）
+    - 其他真实供应商 → OpenAICompatRerank（走 {base_url}/rerank）
+
+    供应商取 ``rerank_provider`` → ``llm_provider`` → ``rag_provider``（K0）。
+    加 ``rerank_provider`` 是因为 embedding 与 LLM 可能分属不同家中转，
+    重排该跟向量空间更近的那家走，不能硬绑在 LLM 槽位上。
     """
     s = settings or get_settings()
     if not s.rerank:
         return NoopRerank()
-    p = s.llm_provider or s.rag_provider  # rerank 跟随 LLM 插槽（同一家中转通常一起提供）
+    p = s.rerank_provider or s.llm_provider or s.rag_provider
     if p == "mock":
         return MockRerank()
     base_url, api_key = _resolve_endpoint(s, p)
+    if p == "bailian":
+        return DashScopeRerank(base_url=base_url, api_key=api_key, model=s.rerank_model)
     return OpenAICompatRerank(base_url=base_url, api_key=api_key, model=s.rerank_model)
