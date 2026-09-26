@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # finish_reason=length，答案被截在句子中间甚至为空。故默认给 2048。
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
+    # 推理开关（K3）：留空（默认）= 请求里**不下发**该字段，兼容任意供应商/中转站
+    # （实测多发不认识的字段会被中转站以 400 UNKNOWN_FIELD 顶回来）；
+    # "true" / "false" = 显式下发 ``enable_thinking``。
+    # 为什么需要它：Qwen3 系推理模型把思维链花掉的 token 也算进同一份 max_tokens 预算，
+    # 实测同一问题「关思考 6.3s / 开思考 17.9s」，且关思考后正文反而更完整
+    # （预算没被思维链吃掉）。演示场景建议关。
+    llm_enable_thinking: str = ""  # "" | "true" | "false"
 
     # ---- RAG 参数 ----
     chunk_size: int = 800
@@ -94,6 +101,21 @@ class Settings(BaseSettings):
         if v not in ("fixed", "structure", "structure+semantic"):
             raise ValueError("chunk_strategy 必须是 fixed | structure | structure+semantic")
         return v
+
+    @field_validator("llm_enable_thinking")
+    @classmethod
+    def _validate_thinking(cls, v: str) -> str:
+        """只接受 "" / true / false。用字符串而非 bool|None 是因为 .env 里留空的
+        写法（``LLM_ENABLE_THINKING=``）在 Optional[bool] 下会直接启动报错。"""
+        v = (v or "").strip().lower()
+        if v not in ("", "true", "false"):
+            raise ValueError("llm_enable_thinking 只能是空、true 或 false")
+        return v
+
+    @property
+    def thinking_flag(self) -> bool | None:
+        """三态映射："" → None（不下发字段）。"""
+        return {"": None, "true": True, "false": False}[self.llm_enable_thinking]
 
     def model_post_init(self, _context) -> None:
         """启动时校验：JWT secret 不能使用默认值（生产部署安全要求）。"""

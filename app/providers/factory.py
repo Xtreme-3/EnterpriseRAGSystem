@@ -181,6 +181,7 @@ def build_llm(settings: Settings | None = None) -> LLMProvider:
         model=s.llm_model,
         temperature=s.llm_temperature,
         max_tokens=s.llm_max_tokens,
+        enable_thinking=s.thinking_flag,
     )
 
 

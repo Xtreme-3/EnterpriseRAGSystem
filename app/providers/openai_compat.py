@@ -41,12 +41,15 @@ class OpenAICompatLLM(LLMProvider):
         model: str,
         temperature: float = 0.2,
         max_tokens: int = 1024,
+        enable_thinking: bool | None = None,
     ) -> None:
         self._client = _make_client(base_url=base_url, api_key=api_key)
         self._model = model
         # 生成参数由配置注入（K3），不再硬编码在 _params 里
         self._temperature = temperature
         self._max_tokens = max_tokens
+        # None = 不下发该字段（兼容不认识的供应商）；见 Settings.llm_enable_thinking
+        self._enable_thinking = enable_thinking
 
     @staticmethod
     def _messages(prompt: str, system: str | None) -> list[dict]:
@@ -61,13 +64,18 @@ class OpenAICompatLLM(LLMProvider):
         self, prompt: str, max_tokens: int | None, system: str | None, *, stream: bool
     ) -> dict:
         """两种模式的公共请求参数，避免 complete/stream 漂移。"""
-        return {
+        params: dict = {
             "model": self._model,
             "messages": self._messages(prompt, system),
             "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
             "temperature": self._temperature,
             "stream": stream,
         }
+        if self._enable_thinking is not None:
+            # 供应商扩展字段只能走 extra_body：openai SDK 不认识顶层未知参数。
+            # 实测中转站的 Qwen3 支持 enable_thinking，但不支持 thinking_budget（400）。
+            params["extra_body"] = {"enable_thinking": self._enable_thinking}
+        return params
 
     def complete(
         self, prompt: str, *, max_tokens: int | None = None, system: str | None = None

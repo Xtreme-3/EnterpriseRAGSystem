@@ -304,6 +304,63 @@ def test_stream_diagnostic_does_not_swallow_mid_stream_error() -> None:
         list(Generator(llm).stream("q", _chunks((1, 0, "x"))))
 
 
+# ---------------------------------------------------------------- 3c. 推理开关（enable_thinking）
+
+
+def test_thinking_flag_defaults_to_unset() -> None:
+    """默认不下发该字段——中转站/其它供应商可能不认识它（实测多发字段会 400）。"""
+    assert Settings(_env_file=None).llm_enable_thinking == ""
+
+
+def test_openai_compat_omits_thinking_field_by_default() -> None:
+    captured: list[dict] = []
+    _stub_openai_llm(captured).complete("问题")
+    assert "extra_body" not in captured[0]
+
+
+def test_openai_compat_passes_enable_thinking_when_configured() -> None:
+    """显式关闭思考：Qwen3 系推理模型的 reasoning token 与正文共用预算，
+    实测同一问题 开思考 17.9s / 关思考 6.3s，且关思考后正文更完整。"""
+    captured: list[dict] = []
+    llm = OpenAICompatLLM(
+        base_url="http://stub/v1", api_key="k", model="m", enable_thinking=False
+    )
+    resp = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="x"))])
+    llm._client = SimpleNamespace(  # type: ignore[assignment]
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kw: (captured.append(kw), resp)[1])
+        )
+    )
+    llm.complete("问题")
+    assert captured[0]["extra_body"] == {"enable_thinking": False}
+
+
+def test_build_llm_maps_thinking_setting(monkeypatch) -> None:
+    """配置字符串 → 三态：''（不下发）/ True / False。"""
+    from app.providers import openai_compat
+    from app.providers.factory import build_llm
+
+    monkeypatch.setattr(
+        openai_compat,
+        "_make_client",
+        lambda **kw: SimpleNamespace(base_url=kw["base_url"], api_key=kw["api_key"]),
+    )
+    base = {
+        "_env_file": None,
+        "rag_provider": "dashscope",
+        "dashscope_api_key": "sk-relay",
+        "dashscope_base_url": "https://relay.example/v1",
+    }
+    assert build_llm(Settings(**base, llm_enable_thinking=""))._enable_thinking is None
+    assert build_llm(Settings(**base, llm_enable_thinking="false"))._enable_thinking is False
+    assert build_llm(Settings(**base, llm_enable_thinking="TRUE"))._enable_thinking is True
+
+
+def test_thinking_setting_rejects_unknown_value() -> None:
+    with pytest.raises(Exception):
+        Settings(_env_file=None, llm_enable_thinking="maybe")
+
+
 # ---------------------------------------------------------------- 4. Mock 供应商兼容
 
 
