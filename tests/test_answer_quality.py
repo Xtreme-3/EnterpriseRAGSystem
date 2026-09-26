@@ -647,3 +647,25 @@ def test_system_prompt_still_requires_naming_source_and_no_fabrication() -> None
     assert "章节" in SYSTEM_PROMPT
     assert "编造" in SYSTEM_PROMPT
 
+
+# ---------------------------------------------------------------- 9. 命中阈值（批 2-3）
+
+
+def test_default_similarity_threshold_separates_unrelated_from_related() -> None:
+    """默认阈值必须落在「库外噪声带」与「库内最弱支撑切片」之间的间隙里。
+
+    实测（kb_1：4 份文档 / 44 切片，hybrid，13 问固定问题集，与 `scripts/k3_eval.py` 同源）：
+
+    - **库外**问题的 raw 余弦最高 **0.371**（3 问共 15 条候选里 13 条 ≤ 0.35）
+    - **库内**问题的 raw 余弦最低 **0.469**（rank-5，仍是有用的支撑切片；
+      注意 K0 报的「库内 top1 0.70–0.79」只是第 1 名，第 5 名会低得多）
+
+    旧默认 0.1 太低：库外问题照样拿满 5 条噪声进 prompt（拒答全靠模型自觉）。
+
+    ⚠️ 这两个边界值是**本演示语料 + 当前 embedding** 的实测结果，
+    换语料或换 embedding 供应商后必须重测（跑 `scripts/k3_eval.py` 与分数分布探针）。
+    """
+    t = Settings(_env_file=None).similarity_threshold
+    assert t > 0.371, f"阈值 {t} 落在库外噪声带内，无关切片会进 prompt"
+    assert t < 0.469, f"阈值 {t} 会切掉库内最弱的支撑切片（实测 rank-5 最低 0.469）"
+
