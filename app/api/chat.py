@@ -82,6 +82,10 @@ class AskResponse(BaseModel):
     conversation_id: int | None = Field(
         default=None, description="J2：本轮消息归属的会话 id（未指定会话为 None）"
     )
+    citation_issues: list[int] = Field(
+        default_factory=list,
+        description="K3 批 2：答案引用了不存在的来源编号（越界编号，升序去重）；空 = 引用全部有效",
+    )
 
 
 class ConversationOut(BaseModel):
@@ -161,6 +165,27 @@ def _parse_doc_ids(raw: str) -> list[int]:
         return [int(x) for x in data] if isinstance(data, list) else []
     except (ValueError, TypeError):
         return []
+
+
+def _done_event(
+    *,
+    answer: str,
+    rewritten_query: str,
+    conversation_id: int | None,
+    citation_issues: list[int],
+) -> dict:
+    """SSE ``done`` 事件的载荷（K3 批 2 加 citation_issues）。
+
+    抽成纯函数是为了能离线断言：路由体在数据库不可用时跑不起来，
+    而这个载荷的形状是前端契约的一部分，必须被测试钉住。
+    """
+    return {
+        "type": "done",
+        "answer": answer,
+        "rewritten_query": rewritten_query,
+        "conversation_id": conversation_id,
+        "citation_issues": citation_issues,
+    }
 
 
 # ---- J2 会话持久化 helpers ----
@@ -355,6 +380,7 @@ def ask(
         sources=_to_sources(result.sources),
         rewritten_query=result.rewritten_query,
         conversation_id=conv.id if conv else None,
+        citation_issues=result.citation_issues,
     )
 
 
@@ -437,6 +463,7 @@ def ask_stream(
                     answer = evt.get("answer", "")
                     sources = evt.get("sources") or sources
                     rewritten_query = evt.get("rewritten_query", rewritten_query)
+                    citation_issues = evt.get("citation_issues") or []
                     # ★ 落库后置：答案已完整，此时才写日志与会话消息
                     _persist_stream_result(
                         session_factory,
@@ -448,12 +475,14 @@ def ask_stream(
                         rewritten_query=rewritten_query,
                         conv_id=conv_id,
                     )
-                    yield sse({
-                        "type": "done",
-                        "answer": answer,
-                        "rewritten_query": rewritten_query,
-                        "conversation_id": conv_id,
-                    })
+                    yield sse(
+                        _done_event(
+                            answer=answer,
+                            rewritten_query=rewritten_query,
+                            conversation_id=conv_id,
+                            citation_issues=citation_issues,
+                        )
+                    )
 
         except Exception:
             logger.exception("流式问答失败 kb_id=%s", kb_id)

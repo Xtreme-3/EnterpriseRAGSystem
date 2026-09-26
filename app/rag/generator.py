@@ -15,6 +15,7 @@ K3 答案质量，两处结构改动：
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 from app.providers.base import LLMProvider
@@ -48,6 +49,20 @@ USER_TEMPLATE = """{history}【资料】
 
 # 来源头。块号对人类是 1-based（底层 chunk_index 从 0 起，这里 +1 展示）
 _SOURCE_HEADER = "[{idx}]（来源：{filename} · 第 {chunk} 块）"
+
+# 引用编号：[N]。编号契约由上面的来源头定义 —— 第 N 块资料在 prompt 里就是 [N]，1-based。
+# 负向前瞻 `(?!\()` 排除 markdown 链接 `[1](url)`：那是超链接，不是来源引用。
+_CITATION_RE = re.compile(r"\[(\d+)\](?!\()")
+
+
+def citation_issues(answer: str, source_count: int) -> list[int]:
+    """答案里引用了不存在的来源编号 → 返回越界编号（去重、升序）；无引用返回 []。
+
+    模型可能写出本次检索根本没有的编号（如只命中 5 块却写 ``[9]``）——
+    那种引用在前端点不开，而服务端原本完全无痕。把它变成可观测信号（K3 批 2）。
+    """
+    cited = {int(m) for m in _CITATION_RE.findall(answer)}
+    return sorted(n for n in cited if n < 1 or n > source_count)
 
 
 class Generator:

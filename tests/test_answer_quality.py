@@ -26,7 +26,7 @@ from app.core.models import Document, KnowledgeBase, User
 from app.providers.base import LLMProvider
 from app.providers.mock import MockEmbedding, MockLLM
 from app.providers.openai_compat import OpenAICompatLLM
-from app.rag.generator import SYSTEM_PROMPT, Generator
+from app.rag.generator import SYSTEM_PROMPT, Generator, citation_issues
 from app.rag.pipeline import RagPipeline
 from app.storage.db import get_db, init_db
 from app.storage.vector_store import ChunkToIndex, ScoredChunk, VectorStore
@@ -484,3 +484,124 @@ def test_pipeline_stream_prompt_carries_real_filename(
     assert "供应商管理制度.pdf" in llm.calls[0]["prompt"]
     done = [e for e in events if e["type"] == "done"][0]
     assert done["sources"][0].filename == "供应商管理制度.pdf"
+
+
+# ---------------------------------------------------------------- 6. 引用编号校验（批 2-1）
+
+
+def test_citation_issues_flags_out_of_range_number() -> None:
+    """引用了不存在的编号（只有 5 块却写了 [9]）→ 必须报出来，这是本功能的唯一目的。"""
+    answer = "根据《供应商管理制度》[1]，须提供营业执照。另见《产品手册》[9]。"
+    assert citation_issues(answer, 5) == [9]
+
+
+def test_citation_issues_accepts_full_valid_range() -> None:
+    """1..N 全部合法；N 本身是合法上界（编号 1-based，不能把 [5]/5 块误判为越界）。"""
+    assert citation_issues("见 [1][2][3][4][5]", 5) == []
+
+
+def test_citation_issues_treats_zero_as_invalid() -> None:
+    """[0] 是非法编号（编号从 1 起），必须报出来而不是当合法值放过。"""
+    assert citation_issues("见 [0]", 5) == [0]
+
+
+def test_citation_issues_returns_empty_without_citations() -> None:
+    """没有引用不是错误：正常答案、以及拒答文案，都应返回空列表且不抛异常。"""
+    assert citation_issues("资料库中未找到相关信息。", 5) == []
+
+
+def test_citation_issues_dedupes_and_sorts() -> None:
+    """重复的越界编号只报一次，且按升序（便于日志比对与前端去重）。"""
+    assert citation_issues("见 [9]、[7]、以及又一次 [9]", 3) == [7, 9]
+
+
+def test_citation_issues_ignores_markdown_links() -> None:
+    """`[1](http://…)` 是 markdown 链接，不是引用编号，不能误报。"""
+    assert citation_issues("参见 [1](http://example.com/a)", 5) == []
+    assert citation_issues("参见 [1](http://example.com/a)", 0) == []
+
+
+def test_citation_issues_handles_multi_digit_numbers() -> None:
+    """两位数编号按数值比较，不能按字符串首字符比较。"""
+    assert citation_issues("见 [10]", 10) == []
+    assert citation_issues("见 [11]", 10) == [11]
+
+
+def test_citation_issues_flags_everything_when_no_source() -> None:
+    """零来源时任何编号都是越界（拒答路径不该出现引用）。"""
+    assert citation_issues("根据 [1] 可知", 0) == [1]
+
+
+# ---------------------------------------------------------------- 7. 引用校验贯通到 API 与流式
+
+
+def test_pipeline_ask_reports_citation_issues(
+    pipeline_env: tuple[Settings, sessionmaker, int, int],
+) -> None:
+    """非流式：RagAnswer 必须带上越界编号，否则调用方无从判断引用是否可点。"""
+    settings, session_factory, kb_id, doc_id = pipeline_env
+    store = _StubStore(
+        [
+            ScoredChunk(
+                document_id=doc_id,
+                kb_id=kb_id,
+                chunk_index=0,
+                content="供应商须提供营业执照。",
+                score=0.9,
+            )
+        ]
+    )
+
+    class _BadCiteLLM(_RecordingLLM):
+        def complete(self, prompt, *, max_tokens=None, system=None) -> str:  # type: ignore[override]
+            self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
+            return "结论见 [1]，补充见 [8]。"  # 只有 1 个来源，[8] 越界
+
+    rag = RagPipeline(
+        settings=settings,
+        session_factory=session_factory,
+        vector_store=store,
+        embedding=MockEmbedding(),
+        llm=_BadCiteLLM(),
+    )
+
+    ans = rag.ask(kb_id, "供应商准入条件？")
+
+    assert ans.citation_issues == [8]
+
+
+def test_pipeline_stream_done_event_reports_citation_issues(
+    pipeline_env: tuple[Settings, sessionmaker, int, int],
+) -> None:
+    """流式是主路径：done 事件不带 citation_issues 的话，流式用户永远看不到这个信号。"""
+    settings, session_factory, kb_id, doc_id = pipeline_env
+    store = _StubStore(
+        [
+            ScoredChunk(
+                document_id=doc_id,
+                kb_id=kb_id,
+                chunk_index=0,
+                content="供应商须提供营业执照。",
+                score=0.9,
+            )
+        ]
+    )
+
+    class _BadCiteLLM(_RecordingLLM):
+        def stream(self, prompt, *, max_tokens=None, system=None):  # type: ignore[override]
+            self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
+            yield "结论见 [1]，补充见 [8]。"
+
+    rag = RagPipeline(
+        settings=settings,
+        session_factory=session_factory,
+        vector_store=store,
+        embedding=MockEmbedding(),
+        llm=_BadCiteLLM(),
+    )
+
+    events = list(rag.ask_stream(kb_id, "供应商准入条件？"))
+
+    done = [e for e in events if e["type"] == "done"][0]
+    assert done["citation_issues"] == [8]
+

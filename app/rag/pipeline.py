@@ -4,20 +4,23 @@ K1 真流式：新增 ``ask_stream()`` 事件化生成器，与 ``ask()`` 并存
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings, get_settings
 from app.core.models import Document
 from app.providers.base import EmbeddingProvider, LLMProvider, RerankProvider
-from app.rag.generator import Generator
+from app.rag.generator import Generator, citation_issues
 from app.rag.query_rewriter import QueryRewriter, build_rewriter
 from app.rag.reranker import Reranker
 from app.rag.retriever import Retriever
 from app.storage.db import get_db
 from app.storage.vector_store import ScoredChunk, VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +41,8 @@ class RagAnswer:
     sources: list[SourceRef]
     # J1 多轮：改写后的检索词（无历史/未改写时为原始 query；调试与测试用）
     rewritten_query: str = ""
+    # K3 批 2：答案引用了不存在的来源编号（越界）；空列表 = 引用全部有效
+    citation_issues: list[int] = field(default_factory=list)
 
 
 class RagPipeline:
@@ -100,7 +105,15 @@ class RagPipeline:
             query, hits, history=history, filenames=filenames
         )
         sources = self._build_sources(hits, filenames)
-        return RagAnswer(query=query, answer=answer, sources=sources, rewritten_query=search_query)
+        issues = citation_issues(answer, len(sources))
+        self._log_citation_issues(kb_id, issues, len(sources))
+        return RagAnswer(
+            query=query,
+            answer=answer,
+            sources=sources,
+            rewritten_query=search_query,
+            citation_issues=issues,
+        )
 
     def ask_stream(
         self,
@@ -148,12 +161,27 @@ class RagPipeline:
             parts.append(token)
             yield {"type": "token", "content": token}
 
+        answer = "".join(parts)
+        # 流式下答案在 done 前才拼完，越界引用只能在这里校验（与 ask() 同一函数，不漂移）
+        issues = citation_issues(answer, len(sources))
+        self._log_citation_issues(kb_id, issues, len(sources))
         yield {
             "type": "done",
-            "answer": "".join(parts),
+            "answer": answer,
             "sources": sources,
             "rewritten_query": search_query,
+            "citation_issues": issues,
         }
+
+    @staticmethod
+    def _log_citation_issues(kb_id: int, issues: list[int], source_count: int) -> None:
+        """越界引用 = 模型编了不存在的来源。界面表现为点不开的假引用，
+        因此服务端必须留痕（K8 约定：可观测的东西不能只躺在响应体里）。"""
+        if issues:
+            logger.warning(
+                "答案引用了不存在的来源编号 kb_id=%s 越界编号=%s 实际来源数=%s",
+                kb_id, issues, source_count,
+            )
 
     def _build_sources(
         self, hits: list[ScoredChunk], filenames: dict[int, str] | None = None

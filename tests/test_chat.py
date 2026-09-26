@@ -182,3 +182,46 @@ def test_ask_invalid_mode_422(client: TestClient) -> None:
     resp = client.post(f"/api/kbs/{kb_id}/ask", json={"query": "test", "mode": "foo"},
                        headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 422
+
+
+# ---- K3 批 2：引用编号校验的对外契约（离线，不依赖 PostgreSQL）----
+
+
+def test_ask_response_exposes_citation_issues() -> None:
+    """非流式响应必须带 citation_issues 字段，且不传时默认空列表（向后兼容）。"""
+    from app.api.chat import AskResponse
+
+    resp = AskResponse(query="q", answer="a", sources=[])
+    assert resp.citation_issues == []
+
+    resp2 = AskResponse(query="q", answer="a", sources=[], citation_issues=[8])
+    assert resp2.citation_issues == [8]
+
+
+def test_done_event_carries_citation_issues() -> None:
+    """流式是主路径：done 事件不带这个字段，流式用户就永远看不到越界引用。"""
+    from app.api.chat import _done_event
+
+    payload = _done_event(
+        answer="结论见 [1]，补充见 [8]。",
+        rewritten_query="q",
+        conversation_id=None,
+        citation_issues=[8],
+    )
+
+    assert payload["type"] == "done"
+    assert payload["citation_issues"] == [8]
+    assert payload["answer"] == "结论见 [1]，补充见 [8]。"
+
+
+def test_done_event_citation_issues_defaults_to_empty() -> None:
+    """引用全部合法时不报错、给空列表（而不是省略字段，前端解析更省事）。"""
+    from app.api.chat import _done_event
+
+    payload = _done_event(
+        answer="a", rewritten_query="q", conversation_id=3, citation_issues=[]
+    )
+
+    assert payload["citation_issues"] == []
+    assert payload["conversation_id"] == 3
+
