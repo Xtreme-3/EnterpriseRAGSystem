@@ -170,6 +170,7 @@ tests/                   # 251 个离线单测（mock 供应商，无需网络�
 | `LLM_ENABLE_THINKING` | 留空 / `true` / `false` | 留空 = 不下发该字段（最兼容）。`false` 关掉思维链：实测整轮 10.6s/问 → **4.1s/问**，正文还更完整 |
 | `RERANK` / `RERANK_PROVIDER` | `true` / `false` + 供应商名 | 打开后叠加重排；供应商留空则跟随 LLM 槽位 |
 | `VECTOR_STORE` | `chroma` / `pgvector` | 数据量大或需与业务库同库时切 pgvector |
+| `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` | 默认 `INFO`。排查「检索搜不到 / 答案被截断 / 重排不准」时开 `DEBUG`——这几类细节在 INFO 下是静默的 |
 
 ## 九、测试
 

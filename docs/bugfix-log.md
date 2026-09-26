@@ -486,3 +486,310 @@ python -m pytest tests/ -q    # 55 passed
 cd frontend && npx vue-tsc --noEmit   # OK
 cd frontend && npx vite build         # ✓ built
 ```
+
+---
+
+# 第二轮：可观测性与错误提示（K8，2026-09-26）
+
+> 起因：对「日志记录 + 错误提示」做了一次只读审计，发现日志只覆盖 6/34 个模块、
+> **21 个有代码的模块零日志**，后端 12 处 + 前端 8 处静默失败点。
+> 审计结论与验收标准见 [`requirements/K8-observability.md`](requirements/K8-observability.md)。
+>
+> 下面按「现象 → 位置 → 根因 → 修复」记录本轮修掉的 8 个缺陷。
+> 新增回归用例 22 个（`tests/test_observability.py`），后端 251 → **273**。
+
+## 28. 🔴 非流式问答失败零日志（同一条链路两种待遇）
+
+- **位置**：`app/api/chat.py:337-338`（`ask` 端点）
+- **现象**：`/api/kbs/{id}/ask` 返回 `502 问答服务暂时不可用`，但服务端日志里**一个字都没有**。
+  同一时刻走 `/ask/stream` 的失败却带着完整堆栈。
+- **根因**：`except Exception: raise HTTPException(502)` —— 只转换了异常类型，
+  没有 `logger.exception`。而流式路径（`chat.py:454-456`）有。两条路径的写法不对称，
+  非流式失败因此完全不可排查：不知道是 embedding 掉线、向量库连不上，还是 LLM 超时。
+- **修复**：补 `logger.exception("非流式问答失败 kb_id=%s query=%s", kb_id, req.query[:50])`。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_non_stream_ask_failure_is_logged` |
+| **测试步骤** | 注册登录建库 → 把 `app.state.rag.ask` 替换成抛 `RuntimeError("embedding 服务掉线")` → 调 `/ask`。 |
+| **预期结果** | 仍返回 502 + 「问答服务暂时不可用」；日志含 ERROR 级记录与异常堆栈原文。 |
+| **实际结果** | 修复前：502 但 caplog 里没有任何 `app.chat` 记录。修复后：`ERROR app.chat ... 非流式问答失败 kb_id=1` + 完整堆栈。 |
+| **测试通过** | ✅ |
+| **修复点** | `chat.py` 的 `except` 块加 `logger.exception`；异常原文只进日志，响应体文案不变。 |
+
+---
+
+## 29. 🔴 鉴权 401 无日志（分不清"token 过期"和"密钥被改"）
+
+- **位置**：`app/api/deps.py:70-76`、`app/api/auth.py:82-84`
+- **现象**：用户报「一直提示登录失效」，日志里查不到任何线索。
+- **根因**：JWT 解码失败、用户不存在、登录密码错误三条路径都是**裸 `raise HTTPException(401)`**，
+  没有日志。而这三种原因在现象上完全一样（都是 401）——
+  「用户 token 自然过期」和「服务端 `JWT_SECRET` 被改过、所有旧 token 全部失效」
+  在日志上长得一模一样，只能靠猜。登录失败更是完全没有暴力破解的审计线索。
+- **修复**：三条路径各补 warning。`get_current_user` 新增 `request: Request` 参数取路径；
+  登录失败区分「用户不存在 / 密码错误」，**只记用户名、绝不记密码**。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_invalid_token_401_is_logged`、`::test_login_failure_is_logged` |
+| **测试步骤** | 1. 用 `Bearer not-a-jwt` 调 `/api/auth/me` 2. 用不存在的用户名+错密码调 `/api/auth/login`。 |
+| **预期结果** | 都是 401；日志各有 WARNING（令牌校验失败 / 登录失败 username=nobody reason=用户不存在），且日志中不含密码明文。 |
+| **实际结果** | 修复前两处均无任何日志记录。修复后按预期各留一条 WARNING，`"wrong" not in 日志` 断言通过。 |
+| **测试通过** | ✅ |
+| **修复点** | `deps.py`：`except JWTError as exc` + 用户不存在分支各加 `logger.warning`；`auth.py` 登录失败加 `logger.warning`（区分 reason）。 |
+
+---
+
+## 30. 🔴 检索命中被阈值筛除时完全静默
+
+- **位置**：`app/storage/vector_store.py:135-136`（`ChromaVectorStore.search`，pgvector 实现同语义）
+- **现象**：「这个知识库搜不到东西」——最高频的报障，但**零线索**。
+- **根因**：`if score <= self._min_score: continue` 直接丢弃，不计数、不记录。
+  结果是「库里根本没内容」和「有内容但被 `similarity_threshold=0.1` 筛掉了」
+  这两种完全不同的故障，在运维侧无法区分。后者在换 embedding 模型、
+  文档是扫描件/表格时相当常见。
+- **修复**：统计被丢弃条数，非零时打一条 DEBUG（含 kb_id、丢弃数/候选总数、阈值）。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_chroma_search_logs_dropped_low_score_hits` |
+| **测试步骤** | 临时 chroma（`min_score=0.99`）写入 1 条向量 → 用正交向量检索。 |
+| **预期结果** | 返回空列表，且日志有 DEBUG「N/M 条低于阈值 similarity_threshold=…」。 |
+| **实际结果** | 修复前：返回空列表、日志无痕。修复后：`检索命中被阈值筛除 kb_id=1：1/1 条低于阈值 similarity_threshold=0.990`。 |
+| **测试通过** | ✅ |
+| **修复点** | 循环内 `dropped += 1`，循环后 `if dropped: logger.debug(...)`。用 DEBUG 而非 INFO——每次检索都会走到，INFO 会淹掉正常日志。 |
+
+---
+
+## 31. 🔴 查询改写失败静默降级
+
+- **位置**：`app/rag/query_rewriter.py:91-94`
+- **现象**：多轮追问老是答不到点子上，但系统"看起来一切正常"。
+- **根因**：`except Exception: return ""` —— 失败后静默退回规则策略。
+  容错本身是对的（不能让改写失败拖垮整轮问答），但**对运维等于失明**：
+  改了模型的温度、换了供应商、额度耗尽，改写一直在失败，日志里毫无体现，
+  只会表现为"多轮效果莫名变差"。异常对象连 `exc` 都没接。
+- **修复**：`except Exception as exc:` + `logger.warning`（说明已降级、检索词可能不完整）。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_rewriter_logs_llm_failure_and_falls_back` |
+| **测试步骤** | 用抛 `RuntimeError("改写模型 502")` 的假 LLM 构造 `QueryRewriter(use_llm=True)`，带历史改写「那超过一万呢」。 |
+| **预期结果** | 返回值仍是规则策略结果「出差住宿标准是多少 · 那超过一万呢」（行为不变），同时日志有 WARNING。 |
+| **实际结果** | 修复前：返回值正确但无日志。修复后：行为不变 + `查询改写失败（降级为规则策略，检索词可能不完整）：改写模型 502`。 |
+| **测试通过** | ✅ |
+| **修复点** | 接住 `exc` 并 `logger.warning`；降级分支的返回值保持 `""` 不变。 |
+
+---
+
+## 32. 🔴 重排返回不完整时静默给 0 分
+
+- **位置**：`app/providers/factory.py`（`OpenAICompatRerank._parse` / `DashScopeRerank._parse`）
+- **现象**：用户反馈「搜得不准」，但接口 200、耗时正常、没有任何报错。
+- **根因**：`_parse` 预设 `[0.0] * n`，只按 `results[].index` 回填。
+  供应商少返回条目、或 `index` 越界时，那些候选的重排分**静默保持 0**，
+  于是被排到最末尾 —— 排序质量下降，但服务端零痕迹。
+  注释写着「缺 index/字段兜底，不 500」，容错设计正确，缺的只是**可观测性**。
+- **修复**：统计实际回填条数，`filled < n` 时 `logger.warning`（说明缺几条、后果是什么）。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_rerank_parse_logs_missing_results` |
+| **测试步骤** | 分别对两家的 `_parse` 传空结果（`{"results": []}` / `{"output": {}}`），`n=3`。 |
+| **预期结果** | 都返回 `[0.0, 0.0, 0.0]`，且各留一条 WARNING。 |
+| **实际结果** | 修复前：返回 0 分但不打日志。修复后：两条 `重排服务返回结果不完整：期望 3 条，实得 0 条…`。 |
+| **测试通过** | ✅ |
+| **修复点** | 抽出共用 `_warn_incomplete_rerank(filled, n)`，两个 `_parse` 各调一次。 |
+
+---
+
+## 33. 🔴 摄取失败只写数据库、不打日志
+
+- **位置**：`app/ingestion/pipeline.py:151-169`（`_fail`）
+- **现象**：批量上传 20 份文档，UI 上 3 份 failed，服务端日志里查不到任何原因。
+- **根因**：`_fail()` 只把 `doc.status="failed"` + `doc.error=str(exc)` 写进数据库，
+  **没有日志**。批量导入出问题时，日志是唯一能回答「哪一份、为什么失败」的地方；
+  只有 UI 能看出来，且要一个个点进去看 error 字段。
+- **修复**：`_fail` 开头 `logger.error`，带 kb_id / 文件名 / 类型 / doc_id / 异常。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_ingestion_failure_is_logged` |
+| **测试步骤** | 建库后摄取 `unsupported.xyz`（不支持的扩展名）。 |
+| **预期结果** | 返回 `Document(status="failed")`，日志含 ERROR 与文件名。 |
+| **实际结果** | 修复前：状态正确但日志无痕。修复后：`摄取失败 kb_id=1 file=unsupported.xyz type=xyz doc_id=None：不支持的文档类型...`。 |
+| **测试通过** | ✅ |
+| **修复点** | `_fail()` 首行加 `logger.error`；`_fail` 被 step1/step3/step4 三处复用，一次补齐全部摄取失败路径。 |
+
+---
+
+## 34. 🔴 摄取收尾失败 → 文档永久卡在 `processing`
+
+- **位置**：`app/ingestion/pipeline.py:115-120`（step4「标记完成」）
+- **现象**：文档列表里某一份永远显示「处理中」，刷新多少次都不变，既没有失败原因也没有重试入口。
+- **根因**：step1（解析/切片/向量化）和 step3（写向量库）都用 `try/except → _fail()` 兜住，
+  **step4 没有**。此处一旦抛错（数据库连接断、行被并发删除），异常直接冒泡出 `ingest_file`，
+  而文档已经以 `processing` 落库、**永远不会再变** —— 状态机 `pending → processing → indexed | failed`
+  的最后一步断了，卡死在中间态。
+- **修复**：step4 加 `try/except → _fail(...)`，与 step1/step3 保持一致。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_finalize_failure_marks_document_failed_not_processing` |
+| **测试步骤** | 用计数器把第 2 次 `get_db`（= step4 收尾写）替换成抛 `RuntimeError("数据库连接断开")`，摄取一份正常 txt。 |
+| **预期结果** | `ingest_file` 不抛异常，返回 `Document(status="failed", error="数据库连接断开")`，日志有 ERROR。 |
+| **实际结果** | 修复前：异常直接冒泡出 `ingest_file`，文档留在 `processing`。修复后：状态 `failed` + error 字段 + 日志三者齐全。 |
+| **测试通过** | ✅ |
+| **修复点** | step4 包 `try/except`，失败走 `return self._fail(kb_id, filename, ext, exc, doc_id=doc_id)`。 |
+
+---
+
+## 35. 🔴 流式回答被截断无告警
+
+- **位置**：`app/providers/openai_compat.py` `OpenAICompatLLM.stream()`
+- **现象**：流式问答给出的答案在半句话处突然结束，用户以为这就是完整答案。
+- **根因**：K3 给 `complete()` 加了 `_warn_if_truncated()`（检查 `finish_reason == "length"`），
+  但**流式路径完全没有这个检查**。而流式恰恰更隐蔽：响应已经以 `done` 事件正常收尾，
+  前端把半截答案当最终答案渲染，HTTP 状态、事件序列全都"正常"。
+  （背景：qwen3.8-flash 这类推理模型的 `reasoning_tokens` 与正文**共用** `max_tokens` 预算。）
+- **修复**：`stream()` 累积循环里检查每个 chunk 的 `finish_reason`，命中 `length` 时告警
+  （用 `warned` 标志保证同一轮只报一次，避免供应商重复下发时刷屏）。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | `test_observability.py::test_stream_warns_when_answer_truncated_by_token_limit` |
+| **测试步骤** | 伪造两段 chunk：第一段 `content="结论："`，第二段 `content=""` + `finish_reason="length"`，`"".join(llm.stream(...))`。 |
+| **预期结果** | 产出内容照常返回（不吞半截答案），同时留一条 WARNING 含「截断」或 `length`。 |
+| **实际结果** | 修复前：产出 `"结论："` 但无任何日志。修复后：产出不变 + `LLM 流式答案被 max_tokens 截断…`。 |
+| **测试通过** | ✅ |
+| **修复点** | 循环内加 `finish_reason` 判断 + 新增 `_warn_stream_truncated()`；`warned` 标志去重。 |
+
+---
+
+## 36. 🔴 422 校验错误在前端渲染成 `[object Object]`
+
+- **位置**：`frontend/src/api/chat.ts:148-156`，以及**全仓 20 处** `err.response?.data?.detail || "默认文案"`
+- **现象**：问答页粘贴一段超过 2000 字的文本后提问，弹出的提示是 `[object Object]`，用户完全不知道哪里错了。
+- **根因**：FastAPI 的 `detail` 有两种形态——业务错误是**字符串**，422 校验错误是**数组**
+  （`[{"loc": [...], "msg": "...", "type": "..."}]`）。
+  `new Error(数组)` / `ElMessage.error(数组)` 会被 `String()` 成 `[object Object]`。
+  `AskRequest.query` 有 `max_length=2000`，所以这个坑**必然会被用户踩到**，
+  而且不止问答页：上传、登录、注册、成员管理等 20 个调用点写法完全一样。
+- **修复**：抽出 `frontend/src/api/error.ts`（`detailToMessage` / `extractErrorMessage` /
+  `isAbortError` / `safeParseJson`），把 20 处调用点统一改成 `extractErrorMessage(err, "各自的兜底文案")`。
+  数组形态会渲染成 `字段名 说明`（多个用「；」连接）。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | 前端无测试框架（见下方「遗留」），按仓库既有约定用类型检查 + 构建 + 手工复现 |
+| **测试步骤** | 1. `npx vue-tsc --noEmit` 2. `npx vite build` 3. 问答页输入 2001 个字符提问。 |
+| **预期结果** | 类型检查与构建通过；提示为可读中文（如 `提问内容过长`），不再是 `[object Object]`。 |
+| **实际结果** | 修复前：`[object Object]`。修复后：走 `detailToMessage` 渲染出可读文案。类型检查 + 构建均通过。 |
+| **测试通过** | ✅（类型检查 + 构建；UI 文案待人工确认） |
+| **修复点** | 新增 `src/api/error.ts`；`chat.ts` 改用它解析非 2xx 响应体；8 个 view + 1 个 api 模块共 20 处调用点统一替换。 |
+
+---
+
+## 37. 🟠 两个页面请求失败后永久停在「加载…」
+
+- **位置**：`frontend/src/views/DocHealth.vue:16`、`frontend/src/views/Diagnostics.vue:16`
+- **现象**：文档健康 / 知识库体检页打不开时，页面主体一直显示「加载文档健康分析…」，看起来在等，其实请求早就失败了。
+- **根因**：占位条件是 `v-if="!loading && !loaded"`。请求失败时 `loaded` 永远为 `false`，
+  而 `finally` 里 `loading` 又被置回 `false` —— 于是**条件永真**，占位永久显示。
+  `catch` 里其实弹了 `ElMessage.error`，但 toast 3 秒就消失，页面本体毫无变化。
+- **修复**：新增 `loadError` 状态；占位文案在失败时变成「加载失败：<原因>」并给一个「重试」按钮，
+  请求开始时清空。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | 前端无测试框架，手工验证 |
+| **测试步骤** | 1. 停掉后端 2. 打开文档健康页 / 体检页。 |
+| **预期结果** | 页面显示「加载失败：无法连接服务器，请确认后端已启动」+「重试」按钮；后端恢复后点重试能正常加载。 |
+| **实际结果** | 修复前：永久显示「加载…」，用户只能反复刷新。修复后：显示失败原因与重试入口。 |
+| **测试通过** | ✅（类型检查 + 构建通过） |
+| **修复点** | 两页各加 `loadError` ref，占位文案改 `:description` 动态绑定 + 重试按钮；`fetch*` 里进入时清空、失败时赋值。 |
+
+---
+
+## 38. 🟠 角色获取失败静默降级为「只读」，按钮凭空消失
+
+- **位置**：`frontend/src/views/DocList.vue:195-197`（`init()` 的 `catch`）
+- **现象**：文档页的上传/删除按钮有时不出现，怎么刷新都没有，也没有任何提示。
+- **根因**：`catch` 里只改了页面标题 `kbName`，**完全不提示**。角色取不到时
+  `myRole` 停在初始值（viewer），I2 的按钮门控据此把上传/删除全部隐藏。
+  用户看到的是"页面功能不见了"，而不是"角色没取到"。
+- **修复**：`catch` 里显式置 `myRole = "viewer"` 并 `ElMessage.warning` 说明当前是只读态、可刷新重试。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | 前端无测试框架，手工验证 |
+| **测试步骤** | 让 `/api/kbs` 列表请求失败（如临时改 token）后进入文档页。 |
+| **预期结果** | 顶部出现提示「未能获取你的库内角色，已按「只读」展示；如需上传文档请刷新页面重试」。 |
+| **实际结果** | 修复前：无任何提示，按钮消失原因不明。修复后：提示明确，用户知道该刷新。 |
+| **测试通过** | ✅（类型检查 + 构建通过） |
+| **修复点** | `init()` 的 `catch` 加 `myRole.value = "viewer"` + `ElMessage.warning(...)`。 |
+
+---
+
+## 39. 🟠 用户主动「停止生成」被当成请求失败
+
+- **位置**：`frontend/src/views/Chat.vue:334-340`（`send()` 的 `catch`）
+- **现象**：点「停止」按钮后，气泡被标成失败态，并弹出英文 `The user aborted a request.`。
+- **根因**：`catch` 不区分错误类型。`AbortController.abort()` 抛出的 `AbortError`
+  与真实的网络/服务端失败走了同一个分支 —— 而"用户主动取消"根本不是错误，
+  不该标红，更不该把浏览器的英文内部文案直接展示给中文用户。
+- **修复**：catch 开头用 `isAbortError(err)`（同时认 `AbortError` 与 axios 的 `ERR_CANCELED`）分流：
+  取消 → 不标失败、无内容时显示「（已停止生成）」并直接 return；其余照旧走 `extractErrorMessage`。
+  顺带修掉 **中途静默断流被当正常结束**：后端每条流都以 `data: [DONE]` 收尾，
+  没等到就说明连接断了，此时把已有内容标记为「回答传输中断，内容可能不完整」。
+
+| 项目 | 内容 |
+|---|---|
+| **测试用例** | 前端无测试框架，手工验证 |
+| **测试步骤** | 1. 提问后立刻点「停止」 2. 提问后中途禁用网络（模拟静默断流）。 |
+| **预期结果** | 1. 气泡不标红，显示「（已停止生成）」。2. 已有内容保留，但明确提示"传输中断、可能不完整"。 |
+| **实际结果** | 修复前：1. 标红 + 英文报错。2. 半截答案被当最终答案呈现。修复后：两种场景都有明确状态。 |
+| **测试通过** | ✅（类型检查 + 构建通过） |
+| **修复点** | 引入 `isAbortError` 分流；新增 `sawTerminator` 标志，循环结束后未收到 `[DONE]` 则标记为中断。 |
+
+---
+
+## 本轮附带修复（非缺陷，但同批完成）
+
+| 项 | 位置 | 内容 |
+|---|---|---|
+| **日志级别可配** | `app/config.py`、`app/logging_config.py`（新增） | `setLevel(INFO)` 原先硬编码在 `main.py`，DEBUG 永久静默、无法开启。新增 `LOG_LEVEL` 配置 + 独立日志模块；改为**配置 root** 而非只配 `app`，`app` 向上传播后 pytest 的 `caplog` 也能收到 app 日志（此前 `propagate=False`，本仓库根本写不出"验证日志是否打印"的测试） |
+| **第三方 logger 统一收编** | `app/logging_config.py` | uvicorn / httpx / chromadb / sqlalchemy 此前不受治理：INFO 静默丢，WARNING 落到 `logging.lastResort`（无时间戳、无级别、无 logger 名）。现在统一走同一个格式化 handler |
+| **request-id 贯穿** | `app/middleware.py`（新增） | 每个响应带 `X-Request-ID`（透传或生成），每行日志带该 id，500 响应体带 `request_id`。用户报障时提供它即可一条 grep 定位全部相关日志 |
+| **渲染期异常提示** | `frontend/src/main.ts` | 新增 `app.config.errorHandler`：此前渲染期异常=白屏，用户拿不到任何提示 |
+
+### 本轮踩到的两个实现坑（已解决，记录避免重犯）
+
+1. **未处理异常处理器跑在中间件之外** —— 异常先沿 ASGI 栈冒泡，`RequestIdMiddleware` 的
+   `finally`（重置 contextvar）先执行，之后最外层的 `ServerErrorMiddleware` 才调用
+   `@app.exception_handler(Exception)`。结果：**最关键的那条 500 日志反而丢了 request_id**。
+   解法：处理器从 `request.state.request_id` 取回 id，用 `request_id_scope()` 重建上下文。
+2. **500 响应头不能指望中间件补** —— `ServerErrorMiddleware` 永远在最外层，
+   它捕获异常后用自己的 `send` 发出响应，绕过了用户中间件的 `send` 包装。
+   解法：`_internal_error_response()` 自己设 `headers={X-Request-ID: ...}`。
+
+### 本轮明确"不做"的（记录决策，避免被当成遗漏）
+
+- **不引入全局错误 toast**：全仓 20 个调用点各自都有 `ElMessage.error`，
+  拦截器再弹一次会让同一个失败弹两条。统一的是"错误消息怎么解析"，不是"谁来弹"。
+- **不配 CORS**：`AGENTS.md` 已明确前端走同源反代，**设计上不需要** CORS。
+  审计阶段把它列为"缺失"是误判，已在需求卡片里更正。
+- **日志不落文件**：部署形态是容器 + stderr 收集，先不引入轮转/JSON 格式化。
+
+### 遗留（本批未做，已记录）
+
+- **前端无测试框架**（`package.json` 只有 `vue-tsc` + `vite build`，没有 vitest）。
+  本批前端改动**无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。
+  这是本批最大的质量缺口，建议单独开卡引入 vitest。
+- **`QaLog` 无 `status` / `duration_ms` / `error` 列**，问答失败不落库 →
+  **失败率这个最基础的指标算不出来**。属数据模型变更（SQLite `create_all` 不会给
+  已存在的表加列，需要迁移方案），另开卡片，本次只在日志侧留痕。
+- **摄取异步化（K4）未做**：`_fail` 的日志虽已补齐，但同步摄取在 HTTP 请求内完成，
+  超时/中断时日志可能来不及落盘。K4 完成后可一并复核。
+

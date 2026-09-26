@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 251 个用例
+- **测试**：pytest + httpx + TestClient，共 273 个用例
 
 ## 目录结构
 
@@ -97,6 +97,35 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
 - 评测脚本：`python scripts/k3_eval.py --kb 1 --out docs/eval/k3-after.md`
   （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因）
 
+## 日志与错误提示（K8，写日志 / 改错误处理前必读）
+
+- **只配 root，别在模块里自己 `addHandler`**：`app/logging_config.setup_logging()` 在
+  `app/main.py` 导入时调用一次，root 持唯一 handler，`app` 记录器 `propagate=True`。
+  自己再配一个 named logger 会让同一条日志打印两遍，并且绕开 `LOG_LEVEL`
+- **`LOG_LEVEL` 可配**（默认 `INFO`）。**排查"检索搜不到 / 答案被截断 / 重排不准"必须先开 DEBUG**
+  —— 零命中、重排退化这类细节在 INFO 下是静默的，这是刻意设计（每次检索都会走到，INFO 会淹掉正常日志）
+- **每条日志自动带 `request_id`**：由 `LogRecordFactory` 注入（不是 handler filter，
+  否则换个 handler 就丢字段）。中间件 `RequestIdMiddleware` 负责透传/生成 `X-Request-ID`
+- **⚠️ 未处理异常处理器跑在中间件之外**：异常先冒泡出中间件、`finally` 重置 contextvar，
+  之后最外层 `ServerErrorMiddleware` 才调用 `@app.exception_handler(Exception)`。
+  所以处理器里**必须**用 `request.state.request_id` + `request_id_scope()` 重建上下文，
+  否则最关键的那条 500 日志反而没有 id。同理，**500 响应头由 `_internal_error_response()`
+  自己设**，不能指望中间件的 `send` 包装（`ServerErrorMiddleware` 用自己的 `send`，绕过用户中间件）
+- **新增的 `except` 块一律要留痕**：能自愈的用 `warning`（401、改写降级、重排退化），
+  需要人介入的用 `exception`（摄取失败、未处理异常）。**只 `raise` 不打日志是缺陷**，
+  本仓库已经因此丢过一整条链路（非流式问答，见 bugfix-log #28）
+- **失败路径必须有日志，成功路径不用**：日志量按"出问题时够不够定位"来定，不按"覆盖全不全"来定
+
+### 前端错误提示（K8）
+
+- 一律用 `@/api/error` 的 `extractErrorMessage(err, "兜底文案")`。
+  **禁止再写 `err.response?.data?.detail || "..."`** —— FastAPI 的 `detail` 在 422 时是**数组**，
+  直接塞进 `ElMessage.error` 会渲染成 `[object Object]`（bugfix-log #36）
+- `isAbortError(err)` 用来区分"用户主动停止"和"请求失败"，前者不该标红
+- 页面加载态用**三态**（加载中 / 加载成功 / 加载失败），不要只用一个 `loaded: boolean`
+  —— 失败时 `loaded` 恒为 false 会让页面永久停在「加载…」（bugfix-log #37）
+- 不引入全局错误 toast：每个调用点自己弹提示，拦截器再弹一次会重复（决策记录见 bugfix-log 本轮"不做"）
+
 ## 前端设计规范（DESIGN.md）
 
 **动任何前端代码（`.vue` / `.css` / 组件样式）之前，先读 [`DESIGN.md`](DESIGN.md)。**
@@ -176,6 +205,7 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
 | 真实 Embedding K0 / 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
 | 答案质量 K3 批 1（system 分离 + 来源元信息 + 生成参数配置化） | ✅ |
+| 可观测性与错误提示 K8（日志可配 + request-id + 静默点开口 + 前端错误归一化） | ✅ |
 | 答案质量 K3 批 2（引用校验 / 拒答分级 / 阈值）/ K4 摄取异步化 | ⬜ |
 
-**251 测试全绿**（138 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**273 测试全绿**（160 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
