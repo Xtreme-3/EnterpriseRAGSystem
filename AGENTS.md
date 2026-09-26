@@ -11,7 +11,7 @@
 - **元数据**：SQLite（默认）/ PostgreSQL
 - **模型**：通义千问 DashScope / 智谱 GLM / mock（离线可测），OpenAI 兼容接口，可插拔
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 187 个用例
+- **测试**：pytest + httpx + TestClient，共 205 个用例
 
 ## 目录结构
 
@@ -32,6 +32,15 @@ app/
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 需求卡片 / 进度日志 / 踩坑日志 / 路线图
 ```
+
+## 前端设计规范（DESIGN.md）
+
+**动任何前端代码（`.vue` / `.css` / 组件样式）之前，先读 [`DESIGN.md`](DESIGN.md)。**
+
+- `DESIGN.md` 定义「界面长什么样」，本文件定义「怎么搭」——两者分工不同，都要遵守
+- 它是唯一的设计 token 来源：颜色 / 字号 / 圆角 / 间距 / 组件形态都在里面，**不要在页面里臆造新值**
+- 完整的设计理念与历史决策见 `docs/design-guide.md`（去 AI 味硬规则）与 `docs/design-manifest.md`（逐页改造清单）
+- DESIGN.md 里 **十、Known Gaps** 列出的 9 项是「已知但尚未落地」的偏差，不要按现状把它们当正确做法去复制
 
 ## 开发约定（积木式开发）
 
@@ -98,5 +107,6 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 混合检索 H1 / 语义切分 H2 | ✅ |
 | 重排序 Rerank I1 / RBAC 权限 I2 | ✅ |
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
+| 真流式生成 K1（阶段五） | ✅ |
 
-**187 测试全绿。** 未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**205 测试全绿**（92 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
