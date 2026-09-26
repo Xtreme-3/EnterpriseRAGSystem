@@ -116,16 +116,35 @@ class OpenAICompatLLM(LLMProvider):
         只取 ``delta.content``：推理模型（如 qwen3.8-flash）会先产 ``reasoning_content``，
         那段思考内容不下发给用户，由前端"正在组织答案…"阶段兜住这段静默期。
         首包/末包可能出现 content 为 None 或空串的 chunk，统一跳过。
+
+        K8-6：末尾 chunk 的 ``finish_reason == "length"`` 意味着答案被砍断。
+        ``complete()`` 早就有告警（``_warn_if_truncated``），流式路径**一直没有** ——
+        而流式恰恰是先给用户看半句话就已经"完成"了，比非流式更隐蔽。
         """
+        effective = self._max_tokens if max_tokens is None else max_tokens
+        warned = False
         for chunk in self._client.chat.completions.create(
             **self._params(prompt, max_tokens, system, stream=True)
         ):
             choices = getattr(chunk, "choices", None)
             if not choices:
                 continue
-            content = getattr(getattr(choices[0], "delta", None), "content", None)
+            choice = choices[0]
+            if not warned and getattr(choice, "finish_reason", None) == "length":
+                self._warn_stream_truncated(effective)
+                warned = True  # 同一轮只告警一次，避免供应商重复下发时刷屏
+            content = getattr(getattr(choice, "delta", None), "content", None)
             if content:
                 yield content
+
+    def _warn_stream_truncated(self, max_tokens: int) -> None:
+        logger.warning(
+            "LLM 流式答案被 max_tokens 截断（finish_reason=length）：model=%s max_tokens=%s。"
+            "流已开始，HTTP 状态码无法再改，前端会把半截答案当最终答案呈现；"
+            "建议调大 LLM_MAX_TOKENS，或在推理模型上关掉 thinking。",
+            self._model,
+            max_tokens,
+        )
 
 
 class OpenAICompatEmbedding(EmbeddingProvider):

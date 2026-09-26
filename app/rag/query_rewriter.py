@@ -12,9 +12,12 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from app.providers.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # 短问句判定上限（字符）：超过视为自包含，不做拼接
 _SHORT_LIMIT = 20
@@ -90,7 +93,10 @@ class QueryRewriter:
         prompt = _LLM_PROMPT.format(history=hist_lines, query=query)
         try:
             return self._llm.complete(prompt, max_tokens=128).strip()
-        except Exception:
+        except Exception as exc:
+            # K8-5：原先静默返回 "" 并降级到规则策略 —— 行为是"容错"，但对运维是"失明"：
+            # 用户抱怨"追问总是答不到点子上"时，日志里看不出改写其实一直在失败。
+            logger.warning("查询改写失败（降级为规则策略，检索词可能不完整）：%s", exc)
             return ""
 
 

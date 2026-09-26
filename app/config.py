@@ -95,6 +95,20 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     jwt_expire_hours: int = 24
 
+    # ---- 日志（K8）----
+    # 级别必须可配：排查"检索零命中 / 重排退化 / 重写失败"这类问题只有 DEBUG 才说得清，
+    # 而旧实现把 setLevel(INFO) 硬编码在 app/main.py —— DEBUG 永久静默，等于没有这一档。
+    # 改这个值不需要动代码；配错的名字**启动期**就报错，不会被静默降级成 INFO。
+    log_level: str = "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL
+
+    @field_validator("log_level")
+    @classmethod
+    def _validate_log_level(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ValueError("log_level 必须是 DEBUG | INFO | WARNING | ERROR | CRITICAL")
+        return v
+
     @field_validator("chunk_strategy")
     @classmethod
     def _validate_chunk_strategy(cls, v: str) -> str:

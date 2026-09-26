@@ -51,5 +51,8 @@ def test_unhandled_exception_returns_json(client: TestClient) -> None:
 
     assert resp.status_code == 500
     body = resp.json()
-    assert body == {"detail": "服务器内部错误"}
+    # K8-2：响应体新增 request_id（用户报障时提供它，运维据此 grep 日志）；
+    # detail 仍是那句通用文案，异常原文绝不外泄。
+    assert body["detail"] == "服务器内部错误"
+    assert body["request_id"]
     assert "内部测试异常" not in resp.text

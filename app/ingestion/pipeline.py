@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +17,8 @@ from app.ingestion.parsers import parse_file
 from app.providers.base import EmbeddingProvider
 from app.storage.db import get_db
 from app.storage.vector_store import ChunkToIndex, VectorStore, build_vector_store
+
+logger = logging.getLogger(__name__)
 
 
 class IngestionPipeline:
@@ -113,10 +116,17 @@ class IngestionPipeline:
             return self._fail(kb_id, filename, ext, exc, doc_id=doc_id)
 
         # 4. 标记完成
-        with get_db(self.session_factory) as db:
-            doc = db.get(Document, doc_id)
-            doc.status = "indexed"
-            doc.chunk_count = len(chunks)
+        # K8-7：这一段原先没有 try/except —— 此处一旦抛错（DB 连接断、行被并发删掉），
+        # 异常直接冒泡出 ingest_file，而文档已经以 processing 落库且**永远不会再变**：
+        # 用户看到的是转圈转到天荒地老的"处理中"，没有失败原因、也没有重试入口。
+        # 与 step1/step3 保持一致：失败一律走 _fail() 落成 failed。
+        try:
+            with get_db(self.session_factory) as db:
+                doc = db.get(Document, doc_id)
+                doc.status = "indexed"
+                doc.chunk_count = len(chunks)
+        except Exception as exc:
+            return self._fail(kb_id, filename, ext, exc, doc_id=doc_id)
         return doc
 
     def delete_document(self, document_id: int) -> None:
@@ -149,7 +159,20 @@ class IngestionPipeline:
         return split_text(text, chunk_size=size, chunk_overlap=overlap)
 
     def _fail(self, kb_id: int, filename: str, ext: str, exc: Exception, doc_id: int | None = None) -> Document:
-        """摄取失败：若已有 processing 记录则置为 failed，否则新建 failed 记录。"""
+        """摄取失败：若已有 processing 记录则置为 failed，否则新建 failed 记录。
+
+        K8-5：原先只写 DB 的 ``doc.error``、不打日志 —— 服务端日志里摄取失败**完全无痕**，
+        只有打开 UI 才看得到 failed。批量导入出问题时，日志是唯一能回答
+        "哪一份、为什么"的地方。
+        """
+        logger.error(
+            "摄取失败 kb_id=%s file=%s type=%s doc_id=%s：%s",
+            kb_id,
+            filename,
+            ext,
+            doc_id,
+            exc,
+        )
         with get_db(self.session_factory) as db:
             if doc_id is not None:
                 doc = db.get(Document, doc_id)

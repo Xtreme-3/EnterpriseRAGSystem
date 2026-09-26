@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 
 from fastapi import Depends, HTTPException, Request, status
@@ -13,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.models import User
+
+logger = logging.getLogger("app.api.deps")
 
 security = HTTPBearer()
 
@@ -58,12 +61,17 @@ def get_ingestion(request: Request):
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
     """从 Authorization: Bearer <token> 解析 JWT，返回当前登录用户。
 
     令牌无效、过期、或用户不存在均返回 401。
+
+    K8-4：三条 401 分支各自留下 warning。此前完全无日志，导致
+    「用户 token 过期」和「服务端 JWT_SECRET 被改过」这两种现象
+    **在日志上长得一模一样**（都是 401），只能靠猜。
     """
     token = credentials.credentials
     settings = get_settings()
@@ -72,10 +80,13 @@ def get_current_user(
         username: str | None = payload.get("sub")
         if username is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的令牌")
-    except JWTError:
+    except JWTError as exc:
+        # 只记原因与路径，**不记 token 本身**（那是凭据）
+        logger.warning("令牌校验失败 path=%s：%s", request.url.path, exc)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的令牌")
 
     user = db.query(User).filter(User.username == username).first()
     if user is None:
+        logger.warning("令牌有效但用户不存在 path=%s username=%s", request.url.path, username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
     return user

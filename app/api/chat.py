@@ -335,6 +335,10 @@ def ask(
     try:
         result = rag.ask(kb_id, req.query, mode=req.mode, history=history)
     except Exception:
+        # K8-3：这里原先只 raise、不打日志 —— 而流式路径（见 event_stream 的 except）
+        # 有 logger.exception。同一条 RAG 链路两种待遇，非流式失败在服务端完全无痕，
+        # 用户拿到的只有一句"问答服务暂时不可用"。补齐堆栈。
+        logger.exception("非流式问答失败 kb_id=%s query=%s", kb_id, req.query[:50])
         raise HTTPException(status_code=502, detail="问答服务暂时不可用")
 
     _log_qa(db, current_user, kb_id, result)

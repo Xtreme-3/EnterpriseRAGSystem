@@ -1,6 +1,7 @@
 """按配置装配模型供应商。业务代码只调用本模块，不直接 new 具体实现。"""
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlparse
 
 import httpx
@@ -9,6 +10,8 @@ from app.config import Settings, get_settings
 from app.providers.base import EmbeddingProvider, LLMProvider, RerankProvider
 from app.providers.mock import MockEmbedding, MockLLM
 from app.providers.openai_compat import OpenAICompatEmbedding, OpenAICompatLLM
+
+logger = logging.getLogger(__name__)
 
 _RERANK_TIMEOUT = 30.0
 
@@ -72,12 +75,15 @@ class OpenAICompatRerank(RerankProvider):
         """按 results[].index 对齐返回 n 条重排分；缺 index/字段兜底，不 500。"""
         results = payload.get("results") or []
         scores: list[float] = [0.0] * n
+        filled = 0
         for r in results:
             idx = int(r.get("index", 0))
             if not (0 <= idx < n):
                 continue
             raw = r.get("relevance_score", r.get("score", 0.0))
             scores[idx] = float(raw)
+            filled += 1
+        _warn_incomplete_rerank(filled, n)
         return scores
 
 
@@ -122,12 +128,31 @@ class DashScopeRerank(RerankProvider):
         """按 ``output.results[].index`` 对齐返回 n 条重排分；缺字段兜底，不 500。"""
         results = (payload.get("output") or {}).get("results") or []
         out: list[float] = [0.0] * n
+        filled = 0
         for r in results:
             idx = int(r.get("index", 0))
             if not (0 <= idx < n):
                 continue
             out[idx] = float(r.get("relevance_score", r.get("score", 0.0)))
+            filled += 1
+        _warn_incomplete_rerank(filled, n)
         return out
+
+
+def _warn_incomplete_rerank(filled: int, n: int) -> None:
+    """重排结果不满时的告警（K8-5）。
+
+    缺字段/缺条目的候选会被静默填 0，于是它们被排到最末尾 —— 用户感受到的只是
+    "搜得不准"，服务端没有任何痕迹。这正是"检索质量下降却查不出来"的来源。
+    """
+    if filled >= n:
+        return
+    logger.warning(
+        "重排服务返回结果不完整：期望 %s 条，实得 %s 条；缺失候选的重排分按 0 处理，"
+        "这些候选会被排到末尾（不报错，但排序质量下降）。",
+        n,
+        filled,
+    )
 
 
 def _resolve_endpoint(settings: Settings, provider: str | None = None) -> tuple[str, str]:

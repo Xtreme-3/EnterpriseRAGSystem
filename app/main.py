@@ -17,6 +17,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.logging_config import current_request_id, request_id_scope, setup_logging
+from app.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from app.storage.db import init_db
 
 APP_NAME = "EnterpriseRAG API"
@@ -29,14 +31,12 @@ if sys.stderr is not None:
 if sys.stdout is not None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# 应用日志：只配置 app 记录器，不碰 root / uvicorn 的配置，避免双重输出
+# 应用日志（K8）：root 持唯一 handler，`app.*` 向 root 传播，级别由 LOG_LEVEL 配置。
+# 旧写法把 setLevel(INFO) 硬编码在这里且 propagate=False —— DEBUG 永久静默、
+# 第三方 logger 不受治理、root 上的 handler（含测试捕获）收不到 app 日志。
+# 详见 app/logging_config.py 的模块注释。
+setup_logging(get_settings().log_level)
 logger = logging.getLogger("app")
-if not logger.handlers:
-    _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"))
-    logger.addHandler(_handler)
-logger.setLevel(logging.INFO)
-logger.propagate = False
 
 
 @asynccontextmanager
@@ -86,6 +86,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# K8-2：所有响应带 X-Request-ID（透传或生成），并把它注入日志上下文
+app.add_middleware(RequestIdMiddleware)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -106,9 +109,32 @@ def root() -> dict[str, str]:
 
 @app.exception_handler(Exception)
 async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
-    """未处理异常 → 统一 JSON 500；完整堆栈写日志，客户端只见通用信息。"""
-    logger.exception("未处理异常 %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
+    """未处理异常 → 统一 JSON 500；完整堆栈写日志，客户端只见通用信息 + request_id。"""
+    # request.state.request_id 由 RequestIdMiddleware 从 scope 上挂进来。
+    # 不能直接读 contextvar：异常是"先冒泡出中间件、后交给本处理器"，
+    # 中间件的 finally 已经把上下文重置了（详见 request_id_scope 的注释）。
+    request_id = getattr(request.state, "request_id", None) or current_request_id()
+    with request_id_scope(request_id):
+        logger.exception("未处理异常 %s %s: %s", request.method, request.url.path, exc)
+    return _internal_error_response(request_id)
+
+
+def _internal_error_response(request_id: str) -> JSONResponse:
+    """未处理异常的响应体。
+
+    带 ``request_id`` 是 K8-2 的关键：用户报障时能提供它，运维据此在日志里
+    一条 ``grep`` 定位到该请求的全部日志行；只给「服务器内部错误」的话，
+    双方都只能靠时间戳猜。
+
+    **响应头必须在这里自己补**，不能指望 ``RequestIdMiddleware``：
+    ``ServerErrorMiddleware`` 永远在最外层，它捕获异常后用自己的 ``send`` 发出 500，
+    绕过了我们这层 ``send`` 包装 —— 由中间件统一加头的那条路径覆盖不到未处理异常。
+    """
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误", "request_id": request_id},
+        headers={REQUEST_ID_HEADER: request_id},
+    )
 
 
 # ---- 挂载业务路由 ----

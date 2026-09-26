@@ -4,11 +4,14 @@
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,10 +132,13 @@ class ChromaVectorStore(VectorStore):
             include=["documents", "metadatas", "distances"],
         )
         hits: list[ScoredChunk] = []
-        for i in range(len(res["ids"][0])):
+        dropped = 0
+        candidates = len(res["ids"][0])
+        for i in range(candidates):
             md = res["metadatas"][0][i] or {}
             score = 1.0 - res["distances"][0][i]  # 余弦距离 → 相似度
             if score <= self._min_score:
+                dropped += 1
                 continue  # 低于命中阈值（含无关噪声）不算命中
             hits.append(
                 ScoredChunk(
@@ -142,6 +148,17 @@ class ChromaVectorStore(VectorStore):
                     content=res["documents"][0][i],
                     score=score,
                 )
+            )
+        if dropped:
+            # K8-5：这里原先直接 continue —— "我搜不到东西"是最高频的报障，
+            # 却完全没有任何线索判断"是库里没内容"还是"内容被阈值筛掉了"。
+            # 用 DEBUG：每次检索都会走到，INFO 会把正常日志淹掉。
+            logger.debug(
+                "检索命中被阈值筛除 kb_id=%s：%s/%s 条低于阈值 similarity_threshold=%.3f",
+                kb_id,
+                dropped,
+                candidates,
+                self._min_score,
             )
         return hits
 
