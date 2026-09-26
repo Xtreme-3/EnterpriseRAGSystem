@@ -44,11 +44,14 @@
 
 ### 附带发现（可立即验证，零代码）
 
-`app/config.py:53` 默认 `chunk_strategy = "fixed"`，而定长递归切块**不含章节标题**。
-`split_structure` 会把标题段落在该块开头（`chunker.py:196-210`：标题作为 `buf` 起点）。
-所以**把 `CHUNK_STRATEGY` 改成 `structure`，块内自带「4.2 五金件标准」这类标题行，
-模型引用条款号的能力会立刻上一个台阶**——这是本积木里性价比最高的一步，
-不需要写代码，改配置 + 重新摄取即可验证。
+`chunk_strategy` 的**代码默认**是 `fixed`（`app/config.py`，作为回归兜底保留），
+而定长递归切块**不含章节标题**。`split_structure` 会把标题段落在该块开头
+（`chunker.py:196-210`：标题作为 `buf` 起点）。所以把 `CHUNK_STRATEGY` 改成 `structure`，
+块内自带「4.2 五金件标准」这类标题行，模型引用条款号的能力会立刻上一个台阶。
+
+> **状态（2026-09-26）**：`.env` 与 `.env.example` 均已为 `structure`，
+> `kb_1` 的 4 份文档 / 44 个切片也都是 structure 产物。**这一步在本批之前就已完成**，
+> 故本批没有 fixed/structure 对照数据。代码默认值仍留 `fixed`（回归兜底），未改。
 
 ## 方案
 
@@ -109,21 +112,73 @@
 
 ### 5. 可配置项（`app/config.py`）
 
-- `llm_temperature: float = 0.2`（现在硬编码在 `openai_compat.py:25`）
-- `llm_max_tokens: int = 1024`（现在硬编码默认值）
-- `answer_style: str = "structured"`（`concise` | `structured` | `detailed`）
-- `citation_check: bool = True`
+批 1 实际落地：
+
+- `llm_temperature: float = 0.2`（原先硬编码在 `openai_compat.py` 里）
+- `llm_max_tokens: int = 2048`（原先硬编码 1024；**2048 是被推理 token 逼出来的**，见上）
+- `llm_enable_thinking: str = ""`（`"" | true | false`，三态；默认**不下发**该字段）
+- ~~`answer_style`~~ / ~~`citation_check`~~ → 按 YAGNI 砍掉：批 1 只验证「来源可溯」这一件事，
+  没证据表明需要三档风格；`citation_check` 属 K3-4，连着 `citation_issues` 一起留批 2。
 
 ## 子块
 
-| 子块 | 功能 | 说明 |
+| 子块 | 功能 | 状态 |
 |------|------|------|
-| K3-0 | `CHUNK_STRATEGY=structure` + 重新摄取验证 | **零代码**，先做，立竿见影 |
-| K3-1 | `LLMProvider.complete/stream` 支持 `system` | Mock 忽略即可 |
-| K3-2 | `_attach_filenames` 提前 + 上下文带文档名/块号/章节 | 两处调用点（ask / ask_stream） |
-| K3-3 | system/user 分离的 prompt 重构 + 拒答分级 | 核心 |
-| K3-4 | 引用编号校验 + `citation_issues` 可观测 | 只统计不改文 |
-| K3-5 | temperature / max_tokens / answer_style 配置化 | — |
+| K3-0 | `CHUNK_STRATEGY=structure` + 重新摄取验证 | ✅ **零代码**，先做，立竿见影 |
+| K3-1 | `LLMProvider.complete/stream` 支持 `system` | ✅ 批 1 |
+| K3-2 | 文档名解析提前到生成前 + 上下文带文档名/块号 | ✅ 批 1 |
+| K3-3 | system/user 分离的 prompt 重构 | ✅ 批 1（**拒答分级留批 2**） |
+| K3-4 | 引用编号校验 + `citation_issues` 可观测 | ⏸ 批 2 |
+| K3-5 | temperature / max_tokens / enable_thinking 配置化 | ✅ 批 1（`answer_style`、`citation_check` 按 YAGNI 砍掉） |
+| K3-6 | **未列入原计划**：推理 token 挤空正文 → `max_tokens` 2048 + 截断告警 + 空答案兜底 | ✅ 批 1，见下 |
+
+## 批 1 实测记录（2026-09-26）
+
+数据侧：`kb_1` 从 1 份文档补到 **4 份 / 44 个切片**，全部用 `structure` 策略
+（`.env` 里 `CHUNK_STRATEGY=structure` 早已就位，且原有 15 个切片经检查确认是
+structure 产物——章节标题落在块首）。故**本批没有"fixed vs structure"的对照数据**，
+切块不是本批的变量。
+
+评测（`scripts/k3_eval.py`，13 问固定问题集，指标全部机器判定）：
+
+| 配置 | 答案点名文档 | 检索命中@1 | 正确拒答 | 平均耗时 | 空答案 |
+|---|---|---|---|---|---|
+| baseline（K3 之前） | **0/10** | 9/10 | 3/3 | 7661 ms | 1 |
+| K3-after（`enable_thinking=false`，最终配置） | **10/10** | 9/10 | 3/3 | **4137 ms** | 0 |
+| K3-after（`enable_thinking=true`） | 9/10 | 9/10 | 3/3 | 10616 ms | 0 |
+
+归因说明：`检索命中@1` 三行一致（9/10），因为 K3 只动 prompt 侧、不动检索；
+差异全部落在「答案点名文档」与耗时上，即 prompt 重构的作用被干净地隔离出来了。
+（风险 #1「不知道哪一处起作用」由此可控。）
+
+### 三个由评测照出来的真实缺陷
+
+1. **答案被推理 token 挤空/截断**。`qwen3.8-flash` 的 `reasoning_tokens` 与正文**共用**
+   `max_tokens` 预算：1024 时 reasoning 吃掉 922，正文只剩 ~100 → `finish_reason=length`；
+   baseline 那轮第 9 问直接返回**空答案**（HTTP 仍是 200）。
+   处置：`max_tokens` 默认 1024 → **2048**；`complete()` 对 `finish_reason=length`
+   记 WARNING（见 `openai_compat.py`）。
+2. **空答案直达前端**。`Generator.generate/stream` 在模型返回空白时给 `LLM_EMPTY_ANSWER`，
+   与 `NO_HIT_ANSWER` 分开（「资料里没有」≠「模型没答上」）；只在正常收尾后兜底，
+   中途异常照原样冒泡。
+3. **只说编号不说文档名**。原第 4 条只要求「标注来源编号」，模型就只输出 `[1]`，
+   实测点名率 **0/10**。改为要求「句末标编号 + 句中写文档名与章节号」后 → **10/10**。
+
+### 意外收获：关掉思考更快且更好
+
+`enable_thinking=false` 实测同一问题 17.9s → 6.3s，正文反而更完整（635 vs 267 字），
+整轮 4.1s/问 vs 10.6s/问，点名率还更高。故 `LLM_ENABLE_THINKING` 默认 `false`。
+`thinking_budget` 中转站不支持（400 `UNKNOWN_FIELD`）。
+
+### 遗留（不属于本批）
+
+- 「皮具类的五金件有什么标准？」期望文档只排到第 4 位（模型靠 top_k=5 兜住了）。
+  检索排序属批 2 / K4 范围。
+- `similarity_threshold=0.1` 仍偏低：库外问题虽正确拒答，检索侧照样返回 5 条噪声。
+  上调会改变召回，须单独评测后再动。
+- `_filename_map()` 现在在 `ask()` 里先于生成立即调用（`ask_stream()` 中原已在
+  `sources` 事件前），多一次 `Document` 查询的代价与原先相同——原先
+  `_attach_filenames` 也是每请求一次，只是位置更靠后。
 
 ## 输入 / 输出
 
@@ -132,16 +187,24 @@
 
 ## 验收标准（可测试）
 
-- [ ] `Generator.build_prompt()` 输出的 context 每块含文档名与块号（字符串断言）
-- [ ] 无历史时 prompt 不含【对话历史】块（J1 回归不变）
-- [ ] `MockLLM` 在新模板下仍能正确解析出 query 与各块（`_parse_prompt` 回归）
-- [ ] 引用校验：构造含 `[9]` 而只有 5 块 → `citation_issues == [9]`；无引用 → 记录为空列表且不报错
-- [ ] `system` 参数：`OpenAICompatLLM` 用 stub 断言 messages[0].role == "system"；
+### 批 1（已交付，2026-09-26）
+
+- [x] `Generator.build_prompt()` 输出的 context 每块含文档名与块号（字符串断言）
+- [x] 无历史时 prompt 不含【对话历史】块（J1 回归不变）
+- [x] `MockLLM` 在新模板下仍能正确解析出 query 与各块（`_parse_prompt` 回归）
+- [x] `system` 参数：`OpenAICompatLLM` 用 stub 断言 messages[0].role == "system"；
       传 None 时退化为单条 user（向后兼容）
-- [ ] **人工评测**（真 Key）：准备 6 个问题（含 2 个答案不在库内的、1 个需跨两份文档的），
-      改前/改后各跑一遍，按 4 维打分：答到点 / 无幻觉 / 引用有效 / 结构可读。
-      目标：6 问中 ≥5 问"答到点"，幻觉 0 例，引用有效率 ≥90%
-- [ ] 现有 226 测试全绿
+- [x] `temperature` / `max_tokens` 配置化，且调用级显式传值优先
+- [x] **机器评测**（真 Key）：13 问（10 库内 + 3 库外），baseline 与 K3 各跑一遍。
+      结果见 [`docs/eval/README.md`](../eval/README.md)：点名文档 **0/10 → 10/10**，
+      检索命中@1 **9/10 → 9/10（未动检索，符合预期）**，正确拒答 3/3，无空答案
+- [x] 现有 226 测试全绿 → 实际 **251 collected / 0 failed / 113 skipped**（+25）
+
+### 批 2（未开始）
+
+- [ ] 引用校验：构造含 `[9]` 而只有 5 块 → `citation_issues == [9]`；无引用 → 记录为空列表且不报错
+- [ ] 拒答分级：资料只覆盖一部分 / 两份资料冲突时的中间态处理
+- [ ] `similarity_threshold` 上调（0.1 → ~0.35）并重测召回
 
 ## 依赖
 
@@ -158,24 +221,33 @@
 
 ## 不做什么（边界，防止范围蔓延）
 
-- **不新增数据库列**（heading/section 字段）→ 保住 SQLite 无迁移的现状
-- 不做答案的自动引用重排/重编号
-- 不做"答案自评/自动打分"（属于更大的评测体系，单独排）
-- 不做 few-shot 示例（先把基础 prompt 效果测出来，有效果不够再加）
-- 不改检索引擎的召回逻辑（prompt 只影响"用给定资料怎么答"，别甩锅到检索）
-- 不做多模型对比评测框架（K7 的模型切换做完再说）
+- **不新增数据库列**（heading/section 字段）→ 保住 SQLite 无迁移的现状 ✅ 遵守
+- 不做答案的自动引用重排/重编号 ✅ 遵守（空答案兜底只换成提示语，不动正文）
+- 不做"答案自评/自动打分"（属于更大的评测体系，单独排）✅ 遵守（指标由脚本判、不调模型打分）
+- 不做 few-shot 示例（先把基础 prompt 效果测出来，有效果不够再加）✅ 遵守
+- 不改检索引擎的召回逻辑（prompt 只影响"用给定资料怎么答"，别甩锅到检索）✅ 遵守
+  （`检索命中@1` 前后一致即为证据）
+- 不做多模型对比评测框架（K7 的模型切换做完再说）✅ 遵守（`enable_thinking` 是同一模型内
+  的推理开关，不是换模型）
 
 ## 失败点 / 风险
 
 - **无法归因**：prompt 改了好几处，效果变好/变差不知道是哪一处。→ 严格按子块顺序做，
   每个子块单独跑一次那 6 个问题并记录。
+  → 批 1 实际做法：把指标拆成「检索命中」与「点名文档」两组，检索组前后一致即证明
+  差异来自 prompt 侧；详见 [`docs/eval/README.md`](../eval/README.md)。
 - **上下文变长导致成本与延迟上升**：加元信息会增 token。→ 元信息行控制在一行、
   非正文；评测时同时记录首字节延迟与总耗时。
+  → 实测 prompt 2516 字符、`prompt_tokens` 1866（含缓存 1792），来源头开销可忽略；
+  真正把耗时推上去的是推理 token，已用 `enable_thinking=false` 解决。
 - **引用校验误伤**：模型可能输出 `[1-3]`、`[1,2]` 等变体导致正则漏抓。
-  → 正则需覆盖 `\[\d+(?:\s*[-,，]\s*\d+)*\]`，并对未匹配形态只记 debug 日志。
+  → 正则需覆盖 `\[\d+(?:\s*[-,，]\s*\d+)*\]`，并对未匹配形态只记 debug 日志。（批 2）
 - **`_attach_filenames` 提前引入额外查询**：每个请求多一次 `Document` 查询。
   → 只查命中的 ≤top_k 个 document_id，可接受；若与 K6 缓存叠加需注意失效。
+  → 实际改为 `_filename_map()`，生成与来源展示共用一份映射，**查询次数与改动前相同**。
 - **`structure` 切块让部分文档块数变化** → 质检台/文档健康的历史数据与新数据不可比，
-  需在 progress-log 记录切换点。
+  需在 progress-log 记录切换点。✅ 已记录。
 - **MockLLM 模板解析被打乱**：改模板时务必保留 `【资料】` 与 `【用户问题】` 两个字面标记，
   否则离线全量测试会集体失败。
+  → 实际还多了一个坑：**来源头含数字**（"第 3 块"），会被 `MockLLM._FACT_RE` 当成事实句
+  混进答案。已加 `_SOURCE_HEADER` 在块级剥离，并有回归断言。

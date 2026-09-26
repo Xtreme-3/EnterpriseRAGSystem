@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 226 个用例
+- **测试**：pytest + httpx + TestClient，共 251 个用例
 
 ## 目录结构
 
@@ -73,6 +73,29 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   它从 SQLite 的 `Chunk.content` 重新编码，**不需要原始文档**
 - **测试不得依赖本机 `.env`**：`tests/conftest.py` 已把供应商钉成 mock。没有这层保护时，
   把 `.env` 切到真实供应商会让单测**真实联网**（消耗线上额度），并因向量维度漂移集体失败
+
+## 生成参数与答案质量（K3，改 prompt / 生成相关代码前必读）
+
+- **system 与 user 分离**：规则类约束走 `LLMProvider.complete/stream(..., system=...)`，
+  user 段只留「资料 + 问题」。新增 provider 实现必须能吃下 `system`（MockLLM 忽略即可），
+  否则整条链路在 mock 模式下直接 TypeError。契约见 `app/rag/generator.py::SYSTEM_PROMPT`
+- **`LLM_MAX_TOKENS` 含推理 token**。推理模型（qwen3.8-flash 等）的 `reasoning_tokens`
+  与正文**共用**这一份预算：给 1024 时 reasoning 实测吃掉 922，正文只剩 ~100
+  → `finish_reason=length`，答案截在句子中间甚至为空（**HTTP 仍是 200**）。
+  默认 2048；`OpenAICompatLLM.complete()` 对 `length` 记 WARNING。
+  改这个值前先想清楚：结论不是"越大越好"，而是"别让思维链把正文挤没了"
+- **`LLM_ENABLE_THINKING` 是三态字符串**（`""` / `true` / `false`），留空 = **不下发**该字段。
+  不要改成 `bool | None` —— `.env` 里写 `LLM_ENABLE_THINKING=`（留空）会直接启动报错。
+  实测关掉思考整轮 4.1s/问 vs 10.6s/问，且正文更完整
+- **文档名必须在生成之前解析**：`RagPipeline._filename_map()` 在 `ask()` / `ask_stream()`
+  里都先于 `generator` 调用，生成与来源展示共用同一份映射。
+  别把 `_attach_filenames` 那种"生成后再补"的写法加回来
+- **来源头含数字**（「[1]（来源：x.pdf · 第 3 块）」），`MockLLM` 里有专门的
+  `_SOURCE_HEADER` 把它剥掉，否则会被 `_FACT_RE` 当成事实句混进答案
+- **离线答案不能是空串**：`Generator` 在模型返回空白时给 `LLM_EMPTY_ANSWER`
+  （与 `NO_HIT_ANSWER` 语义不同：一个是"资料里没有"，一个是"模型没答上"）
+- 评测脚本：`python scripts/k3_eval.py --kb 1 --out docs/eval/k3-after.md`
+  （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因）
 
 ## 前端设计规范（DESIGN.md）
 
@@ -152,5 +175,7 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 重排序 Rerank I1 / RBAC 权限 I2 | ✅ |
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
 | 真实 Embedding K0 / 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
+| 答案质量 K3 批 1（system 分离 + 来源元信息 + 生成参数配置化） | ✅ |
+| 答案质量 K3 批 2（引用校验 / 拒答分级 / 阈值）/ K4 摄取异步化 | ⬜ |
 
-**226 测试全绿**（113 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**251 测试全绿**（138 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
