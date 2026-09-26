@@ -17,6 +17,8 @@ data/
 # 前端构建产物（阶段三）
 frontend/node_modules/
 frontend/dist/
+# Vite 加载配置文件时留下的临时文件
+frontend/vite.config.ts.timestamp-*.mjs
 
 # 编辑器/系统
 .vscode/
