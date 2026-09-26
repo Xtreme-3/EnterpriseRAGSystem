@@ -74,6 +74,10 @@ export function isAbortError(error: unknown): boolean {
  *
  * 覆盖四种来源：axios 错误（带 response）、`fetch` 手动抛的 Error、
  * 网络不通（无 response）、主动取消。
+ *
+ * `fallback` 是调用点为自己这一处准备的文案，**只在服务端返回 4xx
+ * 却没给可读消息时生效**（例如 401 空 body）。服务端给了明确消息、或
+ * 是 5xx 故障、或压根连不上时，都用更准确的内置文案，不套用 fallback。
  */
 export function extractErrorMessage(error: unknown, fallback = "请求失败，请稍后重试"): string {
   if (isAbortError(error)) {
@@ -86,7 +90,15 @@ export function extractErrorMessage(error: unknown, fallback = "请求失败，�
     const detail = (raw as { detail?: unknown })?.detail ?? raw;
     const message = detailToMessage(detail, "");
     if (message) return message;
-    if (response.status) return `请求失败 (${response.status})`;
+    if (response.status) {
+      // 服务端给了状态码但消息不可读（空 body / nginx 错误页）：
+      // 4xx 是「这次的请求本身有问题」，调用点特意传的兜底文案更像人话
+      // （如「登录失败，请检查用户名和密码」）；
+      // 5xx 是服务端故障，套用调用点文案会误导 —— 保留状态码。
+      return response.status < 500 ? fallback || `请求失败 (${response.status})` : `请求失败 (${response.status})`;
+    }
+    // 有 response 却没有 status（手工构造的错误对象）：兜底文案是唯一可用的信息
+    return fallback;
   }
 
   if (error instanceof Error && error.message && error.message !== "Network Error") {
