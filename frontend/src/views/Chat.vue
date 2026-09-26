@@ -132,6 +132,7 @@ import {
   type SourceRef,
 } from "@/api/chat";
 import { kbApi } from "@/api/kbs";
+import { extractErrorMessage, isAbortError } from "@/api/error";
 
 interface Message {
   role: "user" | "assistant";
@@ -249,7 +250,7 @@ async function removeConversation(conv: Conversation) {
   try {
     await conversationApi.remove(kbId, conv.id);
   } catch (e: any) {
-    errorMsg.value = e.response?.data?.detail || "删除会话失败";
+    errorMsg.value = extractErrorMessage(e, "删除会话失败");
     return;
   }
   conversations.value = conversations.value.filter((c) => c.id !== conv.id);
@@ -274,7 +275,7 @@ async function send() {
       activeConvId.value = conv.id;
       conversations.value.unshift(conv);
     } catch (e: any) {
-      errorMsg.value = `创建会话失败：${e.response?.data?.detail || e.message || "请重试"}`;
+      errorMsg.value = `创建会话失败：${extractErrorMessage(e, "请重试")}`;
       return;
     }
   }
@@ -300,9 +301,15 @@ async function send() {
     });
     const reader = resp.body!.getReader();
 
+    // K8-12：后端每条流都以 `data: [DONE]` 收尾（连错误路径也会发）。
+    // 没等到它 = 连接中途断了，此时已累积的内容可能只是半句 —— 旧代码会把
+    // 半截答案当"回答完成"直接呈现给用户，看不出任何异常。
+    let sawTerminator = false;
+
     for await (const event of parseSseStream(reader)) {
       if (event === "done") {
         // [DONE] 结束标记
+        sawTerminator = true;
         break;
       }
       if (event.type === "stage") {
@@ -328,16 +335,27 @@ async function send() {
       }
     }
     assistantMsg.streaming = false;
+    if (!sawTerminator && !assistantMsg.failed) {
+      assistantMsg.failed = true;
+      assistantMsg.failReason = "回答传输中断，内容可能不完整，请重新提问";
+      errorMsg.value = assistantMsg.failReason;
+    }
     if (!assistantMsg.content && !assistantMsg.failed) {
       assistantMsg.content = "（未找到相关信息）";
     }
   } catch (err: any) {
     assistantMsg.streaming = false;
+    // K8-12：用户主动点「停止」/ 切换页面触发 abort，不是错误 ——
+    // 旧代码把它当失败处理，界面上弹出英文的 "The user aborted a request."
+    if (isAbortError(err)) {
+      if (!assistantMsg.content) assistantMsg.content = "（已停止生成）";
+      return;
+    }
     assistantMsg.failed = true;
     if (!assistantMsg.content) {
       assistantMsg.content = "（请求失败）";
     }
-    errorMsg.value = err.message || "连接失败，请稍后重试";
+    errorMsg.value = extractErrorMessage(err, "连接失败，请稍后重试");
   } finally {
     assistantMsg.streaming = false;
     sending.value = false;

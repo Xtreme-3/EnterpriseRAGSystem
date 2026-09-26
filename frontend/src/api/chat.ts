@@ -1,6 +1,7 @@
 import { useAuthStore } from "@/stores/auth";
 import router from "@/router";
 import client from "./client";
+import { detailToMessage, safeParseJson } from "./error";
 
 export interface SourceRef {
   filename: string;
@@ -147,12 +148,12 @@ export async function askStreamRequest(
 
   if (!resp.ok) {
     const body = await resp.text();
-    let detail = `请求失败 (${resp.status})`;
-    try {
-      const json = JSON.parse(body);
-      detail = json.detail || detail;
-    } catch {}
-    throw new Error(detail);
+    // K8-8：`json.detail` 在 422 时是**数组**，直接 new Error(数组) 会渲染成
+    // `[object Object]`。统一走 detailToMessage 归一化。
+    const json = safeParseJson(body) as { detail?: unknown } | null;
+    throw new Error(
+      detailToMessage(json?.detail, `请求失败 (${resp.status})`) 
+    );
   }
 
   if (!resp.body) {

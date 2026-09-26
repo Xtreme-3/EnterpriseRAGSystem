@@ -120,6 +120,7 @@ import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { inspectApi, type InspectHit } from "@/api/inspect";
 import { kbApi } from "@/api/kbs";
+import { extractErrorMessage } from "@/api/error";
 
 const route = useRoute();
 const kbId = Number(route.params.kbId);
@@ -172,7 +173,7 @@ async function runInspect() {
     usedRerank.value = result.rerank;
     ran.value = true;
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "检索失败");
+    ElMessage.error(extractErrorMessage(err, "检索失败"));
   } finally {
     loading.value = false;
   }

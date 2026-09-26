@@ -42,6 +42,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { authApi } from "@/api/auth";
 import { useAuthStore } from "@/stores/auth";
+import { extractErrorMessage } from "@/api/error";
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -73,7 +74,7 @@ async function handleLogin() {
     ElMessage.success("登录成功");
     router.push("/kbs");
   } catch (err: any) {
-    const detail = err.response?.data?.detail || "登录失败，请检查用户名和密码";
+    const detail = extractErrorMessage(err, "登录失败，请检查用户名和密码");
     ElMessage.error(detail);
   } finally {
     loading.value = false;

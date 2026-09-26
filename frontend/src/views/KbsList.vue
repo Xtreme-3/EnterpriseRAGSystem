@@ -160,6 +160,7 @@ import { ElMessage, type FormInstance, type FormRules, type UploadFile, type Upl
 import { Loading, UploadFilled } from "@element-plus/icons-vue";
 import { kbApi, type KBItem, type KBMember } from "@/api/kbs";
 import { docApi } from "@/api/docs";
+import { extractErrorMessage } from "@/api/error";
 
 const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
 
@@ -233,7 +234,7 @@ async function fetchKbs() {
   try {
     kbs.value = await kbApi.list();
   } catch (err: any) {
-    const detail = err.response?.data?.detail || "获取知识库列表失败";
+    const detail = extractErrorMessage(err, "获取知识库列表失败");
     ElMessage.error(detail);
   } finally {
     loading.value = false;
@@ -291,7 +292,7 @@ async function handleCreate() {
         await docApi.upload(kb.id, f);
         uploaded++;
       } catch (e: any) {
-        ElMessage.error(`"${f.name}" 上传失败: ${e.response?.data?.detail || e.message}`);
+        ElMessage.error(`"${f.name}" 上传失败: ${extractErrorMessage(e, "上传失败")}`);
       }
     }
 
@@ -307,7 +308,7 @@ async function handleCreate() {
     // 直接进入文档管理页
     router.push(`/kbs/${kb.id}/docs`);
   } catch (err: any) {
-    const detail = err.response?.data?.detail || "创建失败";
+    const detail = extractErrorMessage(err, "创建失败");
     ElMessage.error(detail);
   } finally {
     creating.value = false;
@@ -320,7 +321,7 @@ async function handleDelete(id: number) {
     ElMessage.success("已删除");
     await fetchKbs();
   } catch (err: any) {
-    const detail = err.response?.data?.detail || "删除失败";
+    const detail = extractErrorMessage(err, "删除失败");
     ElMessage.error(detail);
   }
 }
@@ -333,7 +334,7 @@ async function openMembers(kb: KBItem) {
     members.value = await kbApi.members(kb.id);
     showMembers.value = true;
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "获取成员列表失败");
+    ElMessage.error(extractErrorMessage(err, "获取成员列表失败"));
   }
 }
 
@@ -351,7 +352,7 @@ async function handleAddMember() {
     memberForm.username = "";
     members.value = await kbApi.members(currentKb.value.id);
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "添加成员失败");
+    ElMessage.error(extractErrorMessage(err, "添加成员失败"));
   } finally {
     addingMember.value = false;
   }
@@ -365,7 +366,7 @@ async function toggleMemberRole(row: KBMember) {
     ElMessage.success(`${row.username} 已${newRole === "editor" ? "升为编辑者" : "降为只读"}`);
     members.value = await kbApi.members(currentKb.value.id);
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "修改角色失败");
+    ElMessage.error(extractErrorMessage(err, "修改角色失败"));
   }
 }
 
@@ -376,7 +377,7 @@ async function handleRemoveMember(row: KBMember) {
     ElMessage.success(`已移除成员 ${row.username}`);
     members.value = await kbApi.members(currentKb.value.id);
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "移除成员失败");
+    ElMessage.error(extractErrorMessage(err, "移除成员失败"));
   }
 }
 

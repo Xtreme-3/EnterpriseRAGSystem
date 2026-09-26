@@ -13,7 +13,12 @@
       </div>
     </div>
 
-    <el-empty v-if="!loading && !loaded" description="加载知识库体检报告…" />
+    <el-empty
+      v-if="!loading && !loaded"
+      :description="loadError ? `加载失败：${loadError}` : '加载知识库体检报告…'"
+    >
+      <el-button v-if="loadError" type="primary" @click="fetchDiagnostics">重试</el-button>
+    </el-empty>
 
     <!-- 统计卡片 -->
     <div v-if="loaded" class="stat-grid">
@@ -135,6 +140,7 @@ import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { diagnosticsApi, type Summary, type FailureGroup, type AnomalyDoc, type Consistency } from "@/api/diagnostics";
 import { kbApi } from "@/api/kbs";
+import { extractErrorMessage } from "@/api/error";
 
 const route = useRoute();
 const kbId = Number(route.params.kbId);
@@ -142,6 +148,8 @@ const kbId = Number(route.params.kbId);
 const kbName = ref("");
 const loading = ref(false);
 const loaded = ref(false);
+// K8-10：与 DocHealth 同因同解 —— 失败后 loaded 恒为 false，页面永久停在「加载…」。
+const loadError = ref("");
 const lastCheck = ref(new Date());
 
 const summary = ref<Summary>({
@@ -177,6 +185,7 @@ function formatTime(d: Date): string {
 
 async function fetchDiagnostics() {
   loading.value = true;
+  loadError.value = "";
   try {
     const data = await diagnosticsApi.get(kbId);
     summary.value = data.summary;
@@ -186,7 +195,8 @@ async function fetchDiagnostics() {
     loaded.value = true;
     lastCheck.value = new Date();
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "体检失败");
+    loadError.value = extractErrorMessage(err, "体检失败");
+    ElMessage.error(loadError.value);
   } finally {
     loading.value = false;
   }

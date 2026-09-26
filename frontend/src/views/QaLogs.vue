@@ -43,6 +43,7 @@ import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { qaLogApi, type QaLogItem } from "@/api/qaLogs";
 import { kbApi } from "@/api/kbs";
+import { extractErrorMessage } from "@/api/error";
 
 const route = useRoute();
 const kbId = Number(route.params.kbId);
@@ -60,7 +61,7 @@ async function fetchLogs() {
   try {
     logs.value = await qaLogApi.list(kbId);
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "加载问答历史失败");
+    ElMessage.error(extractErrorMessage(err, "加载问答历史失败"));
   } finally {
     loading.value = false;
   }

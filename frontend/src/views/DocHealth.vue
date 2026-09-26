@@ -13,7 +13,12 @@
       </div>
     </div>
 
-    <el-empty v-if="!loading && !loaded" description="加载文档健康分析…" />
+    <el-empty
+      v-if="!loading && !loaded"
+      :description="loadError ? `加载失败：${loadError}` : '加载文档健康分析…'"
+    >
+      <el-button v-if="loadError" type="primary" @click="fetchHealth">重试</el-button>
+    </el-empty>
 
     <template v-if="loaded">
       <!-- 统计卡片 -->
@@ -113,6 +118,7 @@ import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { docHealthApi, type DocHealthSummary, type DeadDoc, type HotDoc } from "@/api/docHealth";
 import { kbApi } from "@/api/kbs";
+import { extractErrorMessage } from "@/api/error";
 
 const route = useRoute();
 const kbId = Number(route.params.kbId);
@@ -120,6 +126,10 @@ const kbId = Number(route.params.kbId);
 const kbName = ref("");
 const loading = ref(false);
 const loaded = ref(false);
+// K8-10：加载失败时 loaded 永远为 false，页面会**永久停在**「加载…」占位 ——
+// 用户以为在等，其实请求早就失败了（toast 3 秒就消失，页面本体毫无变化）。
+// 用独立的错误态把「加载中」和「加载失败」分开。
+const loadError = ref("");
 
 const summary = ref<DocHealthSummary>({
   total_documents: 0, indexed: 0, active_count: 0, dead_count: 0, total_questions: 0, hit_rate: 0,
@@ -159,6 +169,7 @@ function formatTime(iso: string | null): string {
 
 async function fetchHealth() {
   loading.value = true;
+  loadError.value = "";
   try {
     const data = await docHealthApi.get(kbId);
     summary.value = data.summary;
@@ -166,7 +177,8 @@ async function fetchHealth() {
     hot_docs.value = data.hot_docs;
     loaded.value = true;
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "获取文档健康分析失败");
+    loadError.value = extractErrorMessage(err, "获取文档健康分析失败");
+    ElMessage.error(loadError.value);
   } finally {
     loading.value = false;
   }

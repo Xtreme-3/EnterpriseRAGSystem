@@ -106,6 +106,7 @@ import { ElMessage, type UploadFile, type UploadInstance } from "element-plus";
 import { Upload, UploadFilled, Loading, ArrowLeft } from "@element-plus/icons-vue";
 import { docApi, type DocItem } from "@/api/docs";
 import { kbApi, type KBItem } from "@/api/kbs";
+import { extractErrorMessage } from "@/api/error";
 
 const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
 
@@ -179,7 +180,7 @@ async function fetchDocs() {
       router.push("/kbs");
       return;
     }
-    ElMessage.error(err.response?.data?.detail || "获取文档列表失败");
+    ElMessage.error(extractErrorMessage(err, "获取文档列表失败"));
   } finally {
     loading.value = false;
   }
@@ -193,7 +194,12 @@ async function init() {
     // I2 RBAC：记录当前用户在该库的角色，用于按钮门控
     myRole.value = kb?.role || "viewer";
   } catch {
+    // K8-11：原先这里只改 kbName，**完全不提示**。角色取不到 → myRole 停在初始值
+    // （永久 viewer）→ 上传/删除按钮凭空消失，用户只会觉得"页面坏了"，
+    // 而且刷新多少次都一样。至少要说清"现在是只读态、以及为什么"。
     kbName.value = `知识库 #${kbId}`;
+    myRole.value = "viewer";
+    ElMessage.warning("未能获取你的库内角色，已按「只读」展示；如需上传文档请刷新页面重试");
   }
   await fetchDocs();
 }
@@ -225,7 +231,7 @@ async function handleUpload() {
     showUpload.value = false;
     await fetchDocs();
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "上传失败");
+    ElMessage.error(extractErrorMessage(err, "上传失败"));
   } finally {
     uploading.value = false;
   }
@@ -237,7 +243,7 @@ async function handleDelete(docId: number) {
     ElMessage.success("已删除");
     await fetchDocs();
   } catch (err: any) {
-    ElMessage.error(err.response?.data?.detail || "删除失败");
+    ElMessage.error(extractErrorMessage(err, "删除失败"));
   }
 }
 
