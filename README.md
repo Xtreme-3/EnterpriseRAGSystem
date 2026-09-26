@@ -4,7 +4,7 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **212** 个测试用例全绿 · **27** 个 API 端点 · **10** 个前端页面 · **4** 种文档格式 · 全链路可离线运行
+> **226** 个测试用例全绿 · **27** 个 API 端点 · **10** 个前端页面 · **4** 种文档格式 · 全链路可离线运行
 
 ---
 
@@ -98,7 +98,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **212 个测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **226 个测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -149,7 +149,7 @@ app/
 └── rag/                 # retriever → reranker → query_rewriter → generator
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 27 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 212 个离线单测（mock 供应商，无需网络）
+tests/                   # 226 个离线单测（mock 供应商，无需网络）
 ```
 
 容器化相关（根目录）：`Dockerfile`（API 镜像）、`frontend/Dockerfile`（前端构建 + nginx）、
@@ -161,17 +161,18 @@ tests/                   # 212 个离线单测（mock 供应商，无需网络�
 
 | 变量 | 取值 | 说明 |
 |---|---|---|
-| `RAG_PROVIDER` | `mock` / `dashscope` / `zhipu` | `mock` 完全离线，用于开发与测试 |
-| `EMBEDDING_MODEL` | 默认 `text-embedding-v3` | 换供应商时注意同步 `EMBEDDING_DIM` |
+| `RAG_PROVIDER` | `mock` / `dashscope` / `bailian` / `zhipu` | `mock` 完全离线；`dashscope` 是**第三方中转站槽位**，`bailian` 是阿里云百炼官方 |
+| `EMBEDDING_PROVIDER` | 留空 / `bailian` / `mock` | 插槽级覆盖——「LLM 走中转站 + Embedding 走百炼官方」就是靠它 |
+| `EMBEDDING_MODEL` | 默认 `text-embedding-v3` | 换模型必须同步 `EMBEDDING_DIM`（不符会在首次调用时明确报错）并重建向量集合 |
 | `RETRIEVAL_MODE` | `vector` / `hybrid` | 精确词/型号召回差就切 `hybrid` |
 | `CHUNK_STRATEGY` | `fixed` / `structure` / `semantic` | 制度手册类优先 `structure` |
-| `RERANK` | `true` / `false` | 打开后叠加重排，精度换一点延迟 |
+| `RERANK` / `RERANK_PROVIDER` | `true` / `false` + 供应商名 | 打开后叠加重排；供应商留空则跟随 LLM 槽位 |
 | `VECTOR_STORE` | `chroma` / `pgvector` | 数据量大或需与业务库同库时切 pgvector |
 
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short     # 212 个用例，全程离线
+python -m pytest tests/ -v --tb=short     # 226 个用例，全程离线
 ```
 
 测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
@@ -187,14 +188,17 @@ python -m pytest tests/ -v --tb=short     # 212 个用例，全程离线
 
 **当前阶段：阶段五「内容质量与性能」**（见 [`docs/roadmap.md`](docs/roadmap.md) 阶段五）。
 功能齐了，但接真实用户视角还差两口气 —— **答案读起来不像专业助手**（prompt 与上下文元信息不足）
-和**每次提问都要等**（流式是模拟的、每请求重建模型连接）。K 系列 7 块专治这两件事，
-其中 K1–K4 已开需求卡片，**K1、K2 已完成**：
+和**每次提问都要等**（流式是模拟的、每请求重建模型连接）。而这两件事有个共同前提：
+**检索侧得是真的** —— embedding 一直是 mock（64 维哈希词袋，无语义），召回质量本身不可评测，
+prompt 改完了也看不出好坏。K0 就是来解这个前置的。
+K 系列 8 块，其中 K0–K4 已开需求卡片，**K0、K1、K2 已完成**：
 
 | 块 | 内容 | 一句话动机 |
 |---|---|---|
+| K0 ✅ | 真实 Embedding 接入（K3 前置） | 已完成：embedding 由 mock 切到阿里云百炼官方 `qwen3.7-text-embedding`（1024 维真语义向量），LLM 仍走中转站 —— 三插槽彻底解耦；顺带修掉 rerank 被 LLM 槽位绑死的缺陷（百炼 rerank 不在兼容层，走原生端点）、补 embedding 维度自检、补 `tests/conftest.py` 切断单测对本机 `.env` 的依赖。实测库内命中 top1 **0.70–0.79** vs 库外 **0.28–0.32**，分数首次语义可分 |
 | K1 ✅ | 真流式生成 | 已完成：原先是"先等完整答案再假打字机"，真模型下首字前空白 3–10 秒；现改为 `stage → sources → token → done` 真流式，来源先于答案可见，桩模型实测首字节 1.54s → 53ms |
 | K2 ✅ | 管线单例与连接复用 | 已完成：原先是每请求重建管线（实测白送 **653ms**，根因是 httpx 每个 client 要建 3 个 SSLContext）；现改为 lifespan 装配一次、请求期取用，摄取与问答共用同一份向量库与 embedding，顺带补 PG `pool_pre_ping` 与 OpenAI 显式 timeout/retries |
-| K3 | 答案质量（Prompt + 引用） | 上下文不带文档名/章节，模型说不出"根据《XX》第 4.2 条" |
+| K3 | 答案质量（Prompt + 引用） | 上下文不带文档名/章节，模型说不出"根据《XX》第 4.2 条"；拒答阈值 0.1 偏低（K0 实测已给出 0.35 的依据） |
 | K4 | 摄取异步化 | 上传全程同步阻塞，大文件会撞超时且无进度、不可重试 |
 | K5–K7 | 答案反馈闭环 / 问答缓存 / 参数与模型可视化 | 待开卡 |
 

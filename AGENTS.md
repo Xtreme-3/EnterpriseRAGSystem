@@ -9,9 +9,10 @@
 - **前端**：Vue3 + Vite + Element Plus + Pinia + vue-router
 - **向量库**：ChromaDB（默认，开箱即用）/ PostgreSQL + pgvector（可切换）
 - **元数据**：SQLite（默认）/ PostgreSQL
-- **模型**：通义千问 DashScope / 智谱 GLM / mock（离线可测），OpenAI 兼容接口，可插拔
+- **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
+  OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 212 个用例
+- **测试**：pytest + httpx + TestClient，共 226 个用例
 
 ## 目录结构
 
@@ -52,6 +53,27 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   （httpx 建 3 个 SSLContext），重建即每请求白送这段时间
 - 相关基准脚本：`scripts/k2_assembly_bench.py`
 
+## 模型供应商插槽（K0，写 provider 相关代码前必读）
+
+三个插槽**各自独立**解析供应商，留空则按 `rerank_provider → llm_provider → rag_provider` 兜底：
+
+| 插槽 | 配置项 | 本项目实际指向 |
+|---|---|---|
+| LLM | `LLM_PROVIDER` | 第三方中转站（`RAG_PROVIDER=dashscope` 槽位 → tokenrhythm） |
+| Embedding | `EMBEDDING_PROVIDER` | 阿里云百炼官方（`bailian` 槽位 → `qwen3.7-text-embedding`，1024 维） |
+| Rerank | `RERANK_PROVIDER` | 留空跟随 LLM；要跟 embedding 那家走必须**显式指定** |
+
+- **供应商名与端点是一一对应的**：`dashscope`（本项目历史指向中转站）/ `bailian`（阿里云百炼官方）
+  / `zhipu` / `mock`。注册表在 `app/providers/factory.py::_resolve_endpoint`，加新供应商只需加一个分支
+- **百炼的 rerank 不在 OpenAI 兼容层**：`{base_url}/rerank` 实测 **404**，必须走原生端点
+  `/api/v1/services/rerank/text-rerank/text-rerank`，且响应在 `output.results`（不是顶层 `results`）。
+  故有独立的 `DashScopeRerank` 实现，由 `build_reranker` 对 `bailian` 特判
+- **换 embedding 维度必须重建向量集合**（维度在建集合时钉死）：
+  `python scripts/reindex_embeddings.py --dry-run` 预览 → 去掉 `--dry-run` 执行。
+  它从 SQLite 的 `Chunk.content` 重新编码，**不需要原始文档**
+- **测试不得依赖本机 `.env`**：`tests/conftest.py` 已把供应商钉成 mock。没有这层保护时，
+  把 `.env` 切到真实供应商会让单测**真实联网**（消耗线上额度），并因向量维度漂移集体失败
+
 ## 前端设计规范（DESIGN.md）
 
 **动任何前端代码（`.vue` / `.css` / 组件样式）之前，先读 [`DESIGN.md`](DESIGN.md)。**
@@ -86,6 +108,9 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
 ## 测试
 
 - 测试 fixture 钉死 chroma，无需 PostgreSQL 即可全量跑
+- `tests/conftest.py` 把 `RAG_PROVIDER` / `EMBEDDING_PROVIDER` 钉成 `mock`、`RERANK=false`，
+  保证测试**不读本机 `.env`、不出网、可重复**；`LLM_PROVIDER` / `RERANK_PROVIDER` 钉成**空串**
+  （不设成 mock，否则 `test_rerank.py` 里验证真实装配的用例会静默失去覆盖）
 - pgvector 相关用例单独标记，连不上自动跳过
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
@@ -97,7 +122,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"        # 后端 + 测试依赖
 pip install -e ".[api]"        # 需要 API 服务时
-copy .env.example .env         # 填 DASHSCOPE_API_KEY 或 ZHIPU_API_KEY
+copy .env.example .env         # 填 DASHSCOPE_API_KEY（LLM）/ BAILIAN_API_KEY（Embedding）
 python scripts/demo.py         # 离线冒烟（mock 供应商）
 ```
 
@@ -126,6 +151,6 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 混合检索 H1 / 语义切分 H2 | ✅ |
 | 重排序 Rerank I1 / RBAC 权限 I2 | ✅ |
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
-| 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
+| 真实 Embedding K0 / 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
 
-**212 测试全绿**（99 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**226 测试全绿**（113 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。

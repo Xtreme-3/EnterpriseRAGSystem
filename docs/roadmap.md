@@ -16,8 +16,8 @@
 | 二 | 存储切换 + 后端 API（仪表盘） | 16 | 16 ✅ |
 | 三 | 前端 Vue3（外壳） | 5 | 5 ✅ |
 | 四 | 管理后台（运营中心） | 5 | 5 ✅ |
-| 五 | 内容质量与性能（K 系列） | 7 | 2 ✅ / 5 ⬜ |
-| **合计** | | **42** | **37 ✅ / 5 ⬜** |
+| 五 | 内容质量与性能（K 系列） | 8 | 3 ✅ / 5 ⬜ |
+| **合计** | | **43** | **38 ✅ / 5 ⬜** |
 
 > **你现在位置**：功能面 35 块全绿，K1 真流式已完成（首字节不再等整段生成）。
 > 但真实用户还会撞上两件事 —— **答案不像人说的**（prompt + 上下文元信息不足）和
@@ -102,9 +102,16 @@
 > （摄取与问答共用同一份向量库与 embedding）。实测**每请求固定开销 653ms → 0**
 > （10 次请求省 5.9s），根因是 httpx 每个 client 要建 3 个 SSLContext。
 > 顺带给 PG engine 补 `pool_pre_ping`、给 OpenAI client 补显式 timeout / max_retries。
+>
+> **K0 已完成（2026-09-26）**：embedding 从 mock 切到**阿里云百炼官方**
+> `qwen3.7-text-embedding`（1024 维真实语义向量），LLM 仍走中转站 —— 三个模型插槽彻底解耦。
+> 顺带修掉 `build_reranker` 跟随 LLM 槽位的缺陷（会打到没有 rerank 接口的中转站）、
+> 补上 embedding 返回维度自检、补 `tests/conftest.py` 切断单测对开发者本机 `.env` 的依赖。
+> 它是 K3 的**前置**：mock 向量没有语义，K3 的 prompt 改动做完了也验证不出好坏。
 
 | 块 | 功能 | 需求卡片 | 状态 |
 |---|---|---|---|
+| **K0** | **真实 Embedding 接入（K3 前置）**：新增 `bailian` 供应商槽位（阿里云百炼官方，与 LLM 走的中转站彻底解耦）+ `rerank_provider` 独立槽位 + 百炼原生 rerank 实现（compatible 层没有 rerank）+ embedding 返回维度自检 + `tests/conftest.py` 切断单测对 `.env` 的依赖 | [K0](requirements/K0-real-embedding.md) | ✅ |
 | **K1** | **真流式生成**：`LLMProvider.stream()` + `RagPipeline.ask_stream()` 事件化 + `/ask/stream` 去掉"先同步生成再假打字机" + 前端阶段文案 | [K1](requirements/K1-streaming-generation.md) | ✅ |
 | **K2** | **管线单例与连接复用**：lifespan 装配 `app.state.rag` / `app.state.ingestion`，砍掉每请求重建（httpx 客户端构造 + PG 连接池）| [K2](requirements/K2-pipeline-singleton.md) | ✅ |
 | **K3** | **答案质量**：Prompt 重构（system/user 分离 + 分点结构 + 拒答分级）+ 上下文带文档名/块号/章节 + 引用编号校验 | [K3](requirements/K3-answer-quality.md) | ⬜ |
@@ -118,8 +125,10 @@
 1. **K1 必须最先**。假流式让每次验证都要盲等 8 秒，不先修，后面所有改动都没法高效迭代。
 2. **K2 紧跟（已完成）**。改动最小（主要是 lifespan 装配），却直接砍掉每请求约 653ms
    的固定开销（实测），与 K1 叠加效果最明显。
-3. **K3 第三**。它治的是"内容不符合要求"，但**前提是能连真 Key 实测**——
-   在 mock 下改 prompt 无法验证效果。
+3. **K0 先于 K3（已完成）**。K3 治的是"内容不符合要求"，前提是能连真 Key 实测；
+   但更底层的前提是**检索侧得是真的**——embedding 此前一直是 mock（64 维哈希词袋，
+   无语义），检索召回质量本身不可评测，K3 改完了也看不出好坏。K0 把 embedding 换成
+   百炼官方真实语义向量，K3 才有可验证的基础。
 4. **K4 第四**。影响的是上传体验，与问答体验独立，可以在 K3 之后从容做。
 
 ## 后续候选（暂不拆块）
