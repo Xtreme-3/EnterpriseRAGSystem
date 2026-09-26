@@ -11,7 +11,7 @@
 - **元数据**：SQLite（默认）/ PostgreSQL
 - **模型**：通义千问 DashScope / 智谱 GLM / mock（离线可测），OpenAI 兼容接口，可插拔
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 205 个用例
+- **测试**：pytest + httpx + TestClient，共 212 个用例
 
 ## 目录结构
 
@@ -32,6 +32,25 @@ app/
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 需求卡片 / 进度日志 / 踩坑日志 / 路线图
 ```
+
+## 运行时装配（K2，写路由前必读）
+
+`RagPipeline` / `IngestionPipeline` 及全部 provider 与向量库**在 lifespan 里装配一次**，
+挂在 `app.state`。**路由里不要再 new 管线、不要再调 `build_llm()` 之类的工厂**：
+
+```python
+from app.api.deps import get_rag, get_ingestion
+
+rag = get_rag(request)              # RagPipeline，含 .retriever / .vector_store / .embedding
+ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量库与 embedding
+```
+
+- 可用：`app.state.settings` / `app.state.rag` / `app.state.ingestion` / `app.state.session_factory`
+- `get_rag` / `get_ingestion` 在缺失时抛带指引的 `RuntimeError`（`TestClient` 忘记用
+  `with` 触发 lifespan 时最容易遇到）
+- **原因不是省内存，是省时间**：每构造一个 OpenAI client 约 **650ms**
+  （httpx 建 3 个 SSLContext），重建即每请求白送这段时间
+- 相关基准脚本：`scripts/k2_assembly_bench.py`
 
 ## 前端设计规范（DESIGN.md）
 
@@ -107,6 +126,6 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 混合检索 H1 / 语义切分 H2 | ✅ |
 | 重排序 Rerank I1 / RBAC 权限 I2 | ✅ |
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
-| 真流式生成 K1（阶段五） | ✅ |
+| 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
 
-**205 测试全绿**（92 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**212 测试全绿**（99 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。

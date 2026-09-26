@@ -16,8 +16,8 @@
 | 二 | 存储切换 + 后端 API（仪表盘） | 16 | 16 ✅ |
 | 三 | 前端 Vue3（外壳） | 5 | 5 ✅ |
 | 四 | 管理后台（运营中心） | 5 | 5 ✅ |
-| 五 | 内容质量与性能（K 系列） | 7 | 1 ✅ / 6 ⬜ |
-| **合计** | | **42** | **36 ✅ / 6 ⬜** |
+| 五 | 内容质量与性能（K 系列） | 7 | 2 ✅ / 5 ⬜ |
+| **合计** | | **42** | **37 ✅ / 5 ⬜** |
 
 > **你现在位置**：功能面 35 块全绿，K1 真流式已完成（首字节不再等整段生成）。
 > 但真实用户还会撞上两件事 —— **答案不像人说的**（prompt + 上下文元信息不足）和
@@ -96,11 +96,17 @@
 > `stage(改写/检索/重排) → sources → token* → done`；来源前置（引用早于答案可见）、
 > 落库后置（收到 done 才写，避免空答案）、错误事件化（流内 `error` 事件，HTTP 仍 200）。
 > 桩模型实测：首字节 1.54s → 53ms。
+>
+> **K2 已完成（2026-09-26）**：`RagPipeline` / `IngestionPipeline` 及全部 provider
+> 与向量库在 lifespan 里**装配一次**，请求期取 `app.state.rag` / `app.state.ingestion`
+> （摄取与问答共用同一份向量库与 embedding）。实测**每请求固定开销 653ms → 0**
+> （10 次请求省 5.9s），根因是 httpx 每个 client 要建 3 个 SSLContext。
+> 顺带给 PG engine 补 `pool_pre_ping`、给 OpenAI client 补显式 timeout / max_retries。
 
 | 块 | 功能 | 需求卡片 | 状态 |
 |---|---|---|---|
 | **K1** | **真流式生成**：`LLMProvider.stream()` + `RagPipeline.ask_stream()` 事件化 + `/ask/stream` 去掉"先同步生成再假打字机" + 前端阶段文案 | [K1](requirements/K1-streaming-generation.md) | ✅ |
-| **K2** | **管线单例与连接复用**：lifespan 装配 `app.state.rag`，砍掉每请求重建（TLS 握手 + PG 连接池）| [K2](requirements/K2-pipeline-singleton.md) | ⬜ |
+| **K2** | **管线单例与连接复用**：lifespan 装配 `app.state.rag` / `app.state.ingestion`，砍掉每请求重建（httpx 客户端构造 + PG 连接池）| [K2](requirements/K2-pipeline-singleton.md) | ✅ |
 | **K3** | **答案质量**：Prompt 重构（system/user 分离 + 分点结构 + 拒答分级）+ 上下文带文档名/块号/章节 + 引用编号校验 | [K3](requirements/K3-answer-quality.md) | ⬜ |
 | **K4** | **摄取异步化**：上传即返回 + `IngestionJob` 进度表 + 后台线程池 + 重试接口 + 前端进度条 | [K4](requirements/K4-async-ingestion.md) | ⬜ |
 | **K5** | **答案反馈闭环**：对话页赞/踩 + 可选原因标签 + 落库关联 `ChatMessage`（J2 已预留挂载点）| 待开卡 | ⬜ |
@@ -110,8 +116,8 @@
 ### 为什么是这个顺序
 
 1. **K1 必须最先**。假流式让每次验证都要盲等 8 秒，不先修，后面所有改动都没法高效迭代。
-2. **K2 紧跟**。改动最小（主要是 lifespan 装配），却直接砍掉首字节里一段固定开销，
-   与 K1 叠加效果最明显。
+2. **K2 紧跟（已完成）**。改动最小（主要是 lifespan 装配），却直接砍掉每请求约 653ms
+   的固定开销（实测），与 K1 叠加效果最明显。
 3. **K3 第三**。它治的是"内容不符合要求"，但**前提是能连真 Key 实测**——
    在 mock 下改 prompt 无法验证效果。
 4. **K4 第四**。影响的是上传体验，与问答体验独立，可以在 K3 之后从容做。
