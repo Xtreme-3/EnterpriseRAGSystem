@@ -143,9 +143,11 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
 - **测试路径是 `src/**/*.spec.ts`**（co-located，与源文件同目录）
 - **组件测试用真 Pinia**（`createPinia()` + `setActivePinia()`），不装 `@pinia/testing`；
   Element Plus 用 `global.plugins` 挂上，`ResizeObserver` / `matchMedia` 的兜底在 `src/test/setup.ts`
-- **不要断言第三方库的内部行为**：`ElForm` 级别的 `validate()` 在 jsdom 下的行为与它自己的源码逻辑
-  矛盾（见 `docs/requirements/K9-frontend-testing.md` 的「未定论观察」）。
-  要测本仓的守卫分支，就用替身组件把它确定下来，别依赖库怎么实现
+- **不要断言第三方库的内部行为**：`ElForm` 级别的 `validate()` 在 jsdom 下会把校验失败**当成通过**
+  （根因：`ElFormItem.validate()` reject 了 `undefined`，表单的 `{...undefined}` 累加器得到空对象）。
+  **已用真实 Chromium 验证：生产代码正常，该行为只存在于 jsdom，属测试假象** ——
+  详见 `docs/requirements/K9-frontend-testing.md` 的「一个已查清的 jsdom 差异」与 `bugfix-log.md` 40-A。
+  要测本仓的守卫分支，就用「校验必然失败」的替身组件把它确定下来，别依赖库怎么实现
 
 ## 前端设计规范（DESIGN.md）
 
