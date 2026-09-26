@@ -605,3 +605,45 @@ def test_pipeline_stream_done_event_reports_citation_issues(
     done = [e for e in events if e["type"] == "done"][0]
     assert done["citation_issues"] == [8]
 
+
+# ---------------------------------------------------------------- 8. 拒答分级（批 2-2）
+
+
+def test_system_prompt_grades_out_of_scope_questions() -> None:
+    """①级：资料与问题毫无关系时才整体拒答。
+
+    「资料库中未找到相关信息」这个字面文案是**硬约束**——`NO_HIT_ANSWER` 常量与
+    `scripts/k3_eval.py` 的 `REFUSAL_MARK` 都靠它判分，改文案会把评测改坏。
+    """
+    assert "完全无关" in SYSTEM_PROMPT
+    assert "资料库中未找到相关信息" in SYSTEM_PROMPT
+
+
+def test_system_prompt_grades_partial_coverage() -> None:
+    """②级：资料只覆盖问题的一部分时，答已覆盖的部分 + 点明缺口，不许用常识补齐。
+
+    没有这一级时模型只有两个坏选择：硬凑一个答案，或者整段拒答把有用的部分也丢掉。
+    """
+    assert "只覆盖" in SYSTEM_PROMPT
+    assert "没有提及" in SYSTEM_PROMPT
+
+
+def test_system_prompt_grades_conflicting_sources() -> None:
+    """③级：两份资料互相矛盾时必须把冲突摆出来，不许擅自选一个当结论。
+
+    这是最容易被模型悄悄抹平的情况——只输出其中一个说法，用户根本不知道还有另一种。
+    """
+    assert "冲突" in SYSTEM_PROMPT
+    assert "不一致" in SYSTEM_PROMPT
+    assert "擅自" in SYSTEM_PROMPT
+
+
+def test_system_prompt_still_requires_naming_source_and_no_fabrication() -> None:
+    """回归护栏：分级不能把批 1 的两条硬要求挤掉（点名文档名、不得编造）。
+
+    批 1 实测：只要求标 [N] 时点名率 0/10，改成「句中写文档名」后 10/10。
+    """
+    assert "文档名" in SYSTEM_PROMPT
+    assert "章节" in SYSTEM_PROMPT
+    assert "编造" in SYSTEM_PROMPT
+
