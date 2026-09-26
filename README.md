@@ -175,10 +175,19 @@ tests/                   # 251 个离线单测（mock 供应商，无需网络�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short     # 251 个用例，全程离线
+python -m pytest tests/ -v --tb=short       # 后端 273 个用例，全程离线
+cd frontend && npm test                     # 前端 51 个用例（vitest + jsdom）
 ```
 
-测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
+后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
+
+前端测试覆盖五层：纯函数（`src/api/error.ts`）、Pinia store、axios 拦截器、路由守卫、组件挂载
+（真实挂载登录页）。**前端用例大多是为 K8 已修缺陷补的回归测试**，因此 K9 落地时对其中三条做了
+反向验证 —— 把源码改回有 bug 的写法，确认测试确实变红（3 个缺陷共 10 个用例变红）。
+
+> 前端测试框架是 K9 才补上的：K8 那批前端改动（20 处错误解析传参、8 个页面的错误渲染）
+> 当时**无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。补上框架当天，第一个新写的断言
+> 就照出一个从未生效的参数（`bugfix-log.md` #40）。
 
 ## 十、进度与路线图
 
@@ -194,7 +203,7 @@ python -m pytest tests/ -v --tb=short     # 251 个用例，全程离线
 和**每次提问都要等**（流式是模拟的、每请求重建模型连接）。而这两件事有个共同前提：
 **检索侧得是真的** —— embedding 一直是 mock（64 维哈希词袋，无语义），召回质量本身不可评测，
 prompt 改完了也看不出好坏。K0 就是来解这个前置的。
-K 系列 8 块，其中 K0–K4 已开需求卡片，**K0、K1、K2 已完成，K3 批 1 已完成**：
+K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2、K8、K9 已完成，K3 批 1 已完成**：
 
 | 块 | 内容 | 一句话动机 |
 |---|---|---|
@@ -203,6 +212,8 @@ K 系列 8 块，其中 K0–K4 已开需求卡片，**K0、K1、K2 已完成，
 | K2 ✅ | 管线单例与连接复用 | 已完成：原先是每请求重建管线（实测白送 **653ms**，根因是 httpx 每个 client 要建 3 个 SSLContext）；现改为 lifespan 装配一次、请求期取用，摄取与问答共用同一份向量库与 embedding，顺带补 PG `pool_pre_ping` 与 OpenAI 显式 timeout/retries |
 | K3 🔨 | 答案质量（Prompt + 引用） | **批 1 已完成**：system 规则走独立 `system` 消息、文档名解析提前到生成之前（每块带「[1]（来源：xxx.pdf · 第 3 块）」）、生成参数配置化。13 问机器评测 **答案点名文档 0/10 → 10/10**、库外 3/3 正确拒答、均耗 7.7s → **4.1s**；顺带照出并修掉「推理 token 挤空正文」等 3 个既有缺陷。引用校验 / 拒答分级留批 2 |
 | K4 | 摄取异步化 | 上传全程同步阻塞，大文件会撞超时且无进度、不可重试 |
+| K8 ✅ | 可观测性与错误提示 | 已完成：日志原本只覆盖 6/34 个模块，**后端 12 处 + 前端 8 处静默失败**。`LOG_LEVEL` 可配（原先 `propagate=False`，连 pytest 的 `caplog` 都收不到 app 日志）、`X-Request-ID` 贯穿每个响应与每一行日志、12 项定级为缺陷并修复（含「摄取 step4 无 try/except → 文档永久卡在 `processing`」与「422 的数组 detail 在前端渲染成 `[object Object]`」） |
+| K9 ✅ | 前端测试框架 | 已完成：`frontend/package.json` 原先只有 `vue-tsc && vite build`，**K8 的前端改动无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。现引入 vitest + jsdom + @vue/test-utils，**51 个用例覆盖纯函数 / store / 拦截器 / 路由守卫 / 组件挂载**；vitest 钉 3.x 是为了迁就 vite 5。补上框架当天，新写的第一个断言就照出一个从未生效的参数（`bugfix-log.md` #40） |
 | K5–K7 | 答案反馈闭环 / 问答缓存 / 参数与模型可视化 | 待开卡 |
 
 **尚未排期**：数据看板、管理后台与审计日志、SSO/LDAP、更多格式（Excel / PPT / OCR）、RPA 集成。
@@ -212,8 +223,8 @@ K 系列 8 块，其中 K0–K4 已开需求卡片，**K0、K1、K2 已完成，
 - [系统架构](docs/architecture.md) —— 分层图 + 两条数据流
 - [开发路线图](docs/roadmap.md) —— 全部积木与完成状态
 - [进度日志](docs/progress-log.md) —— 每个积木的实现记录
-- [踩坑日志](docs/bugfix-log.md) —— 27 条按严重度分级的真实问题与修法
-- [需求卡片](docs/requirements/) —— 27 张，动工前先写、完成后验收
+- [踩坑日志](docs/bugfix-log.md) —— 40 条按严重度分级的真实问题与修法
+- [需求卡片](docs/requirements/) —— 30 张，动工前先写、完成后验收
 - [前端去 AI 味设计指令](docs/design-guide.md) —— 禁紫蓝渐变、品牌色 5-10%、圆角分层等硬规则
 - [前端落地方案](docs/design-manifest.md) —— 按本项目 10 个页面的实际形态定制，逐页改什么 + 落地顺序
 - [AGENTS.md](AGENTS.md) —— 给 AI 编码助手看的项目上下文

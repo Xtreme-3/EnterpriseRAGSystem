@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：pytest + httpx + TestClient，共 273 个用例
+- **测试**：后端 pytest + httpx + TestClient（273 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
 
 ## 目录结构
 
@@ -126,6 +126,27 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   —— 失败时 `loaded` 恒为 false 会让页面永久停在「加载…」（bugfix-log #37）
 - 不引入全局错误 toast：每个调用点自己弹提示，拦截器再弹一次会重复（决策记录见 bugfix-log 本轮"不做"）
 
+## 前端测试（K9，改前端代码前必读）
+
+- 跑法：`cd frontend && npm test`（= `vitest run`；开发时 `npm run test:watch`）。
+  **它与后端 `pytest` 同级，是完成定义的一部分** —— 改前端代码两边都要跑
+- **新写的断言要能失败**：本目录的用例大多是给 K8 已修 bug 补的回归测试，**写完就是绿的**，
+  这不能证明它能抓 bug。补这类测试时必须做一次**反向验证** —— 把源码改回有 bug 的写法，
+  确认它变红，再改回来（K9 落地时对 3 个缺陷做过，共 10 个用例变红）
+- **不开 globals**：spec 里一律显式 `import { describe, it, expect, vi } from "vitest"`。
+  因为 `npm run build` 是 `vue-tsc && vite build`，而 `tsconfig.json` 的 `include` 是 `src/**/*.ts`
+  —— 开 globals 就得往 tsconfig 的 `types` 里塞 `vitest/globals`，否则构建会因为 spec 里的
+  `describe` 未定义而失败
+- **vitest 钉在 3.x 是为了迁就 vite 5**：`vitest@5` 的 peer 要求 `vite ^6.4||^7||^8`、
+  `vitest@4` 要求 `^6||^7`，本仓 vite 是 5.4.21，都装不上。
+  **要升 vite 就一起升测试框架**，别单独动其中一个
+- **测试路径是 `src/**/*.spec.ts`**（co-located，与源文件同目录）
+- **组件测试用真 Pinia**（`createPinia()` + `setActivePinia()`），不装 `@pinia/testing`；
+  Element Plus 用 `global.plugins` 挂上，`ResizeObserver` / `matchMedia` 的兜底在 `src/test/setup.ts`
+- **不要断言第三方库的内部行为**：`ElForm` 级别的 `validate()` 在 jsdom 下的行为与它自己的源码逻辑
+  矛盾（见 `docs/requirements/K9-frontend-testing.md` 的「未定论观察」）。
+  要测本仓的守卫分支，就用替身组件把它确定下来，别依赖库怎么实现
+
 ## 前端设计规范（DESIGN.md）
 
 **动任何前端代码（`.vue` / `.css` / 组件样式）之前，先读 [`DESIGN.md`](DESIGN.md)。**
@@ -166,6 +187,7 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
 - pgvector 相关用例单独标记，连不上自动跳过
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
+- **前端**：`cd frontend && npm test`（vitest + jsdom，51 用例）。约定见上文「前端测试（K9）」
 
 ## 环境
 
@@ -206,6 +228,7 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 真实 Embedding K0 / 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
 | 答案质量 K3 批 1（system 分离 + 来源元信息 + 生成参数配置化） | ✅ |
 | 可观测性与错误提示 K8（日志可配 + request-id + 静默点开口 + 前端错误归一化） | ✅ |
+| 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
 | 答案质量 K3 批 2（引用校验 / 拒答分级 / 阈值）/ K4 摄取异步化 | ⬜ |
 
-**273 测试全绿**（160 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 273 测试全绿**（160 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。

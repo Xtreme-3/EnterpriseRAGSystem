@@ -130,6 +130,7 @@
 | **K6** | **问答缓存**：精确命中（KB+query+mode+top_k）→ 语义命中（embedding 余弦 > 0.95）| 待开卡 | ⬜ |
 | **K7** | **对话页参数可视化**：top_k / 检索模式 / Rerank 开关 / **模型切换**（qwen-plus ↔ qwen-turbo，快慢自选）| 待开卡 | ⬜ |
 | **K8** | **可观测性与错误提示**：`LOG_LEVEL` 可配 + 配置 root 收编第三方 logger + `X-Request-ID` 贯穿（响应头/日志/500 响应体）+ 12 处静默失败点开口 + 前端错误归一化（422 数组不再渲染成 `[object Object]`）+ 伪永久加载/静默降级/abort 误报修复 | [K8](requirements/K8-observability.md) | ✅ |
+| **K9** | **前端测试框架**：引入 vitest + jsdom + @vue/test-utils，51 用例覆盖纯函数 / store / 拦截器 / 路由守卫 / 组件挂载；补齐 K8 留下的「前端改动无法走 TDD」缺口 | [K9](requirements/K9-frontend-testing.md) | ✅ |
 
 ### 为什么是这个顺序
 
@@ -149,6 +150,13 @@
    不先补这一层，K4 之后做的任何异步化都会变成新的黑盒。详见
    [K8 需求卡片](requirements/K8-observability.md) 与
    [bugfix-log 第 28–39 条](bugfix-log.md)。
+6. **K9 紧跟 K8（2026-09-26）**。K8 收尾时明确留下一条遗留：前端没有测试运行器，
+   所以 K8 那批前端改动（20 处错误解析传参、8 个页面的错误渲染、`Chat.vue` 的 abort 分流）
+   **无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。
+   代价在 K9 落地的**当天**就兑现了：新写的第一个断言直接照出一个从未生效的参数
+   （[bugfix-log #40](bugfix-log.md) —— `extractErrorMessage` 的 `fallback` 被 20 处传参、
+   文档描述、却没有任何代码路径会读它）。**这一条是先有测试、后发现的缺陷，不是反过来。**
+   详见 [K9 需求卡片](requirements/K9-frontend-testing.md)。
 
 ## 后续候选（暂不拆块）
 
