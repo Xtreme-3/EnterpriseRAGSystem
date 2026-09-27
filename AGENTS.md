@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（273 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
+- **测试**：后端 pytest + httpx + TestClient（291 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
 
 ## 目录结构
 
@@ -94,8 +94,19 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   `_SOURCE_HEADER` 把它剥掉，否则会被 `_FACT_RE` 当成事实句混进答案
 - **离线答案不能是空串**：`Generator` 在模型返回空白时给 `LLM_EMPTY_ANSWER`
   （与 `NO_HIT_ANSWER` 语义不同：一个是"资料里没有"，一个是"模型没答上"）
+- **拒答是三级不是一刀切**（K3 批 2）：`SYSTEM_PROMPT` 第 5 条区分
+  「完全无关 / 只覆盖一部分 / 两份资料相互冲突」。改这一段时**必须保留字面
+  「资料库中未找到相关信息」** —— `NO_HIT_ANSWER` 常量与 `scripts/k3_eval.py` 的
+  `REFUSAL_MARK` 都靠这个子串判分，改文案会把评测改坏（有测试钉住）
+- **越界引用要留痕**：`citation_issues(answer, source_count)` 校验答案里的 `[N]` 是否真存在，
+  非空时 `ask()` / `ask_stream()` 都记 WARNING。正则带 `(?!\()` 排除 markdown 链接
+- **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：实测库内 rank-5 raw 余弦最低 0.469、
+  库外最高 0.371，0.40 落在间隙内。**换语料或换 embedding 后必须重测**，
+  否则这个默认值就是过拟合当前这 4 份文档。注意阈值只在**向量路**生效
+  （`fuse_hybrid` 会重新归一化，关键词路 `search_lexical` 不过滤）
 - 评测脚本：`python scripts/k3_eval.py --kb 1 --out docs/eval/k3-after.md`
-  （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因）
+  （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因。
+  **它不需要 PostgreSQL** —— `VECTOR_STORE=chroma` 时走 SQLite `data/rag.db`）
 
 ## 日志与错误提示（K8，写日志 / 改错误处理前必读）
 
@@ -229,8 +240,9 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 多轮对话 J1 / 会话持久化 J2 | ✅ |
 | 真实 Embedding K0 / 真流式生成 K1 / 管线单例 K2（阶段五） | ✅ |
 | 答案质量 K3 批 1（system 分离 + 来源元信息 + 生成参数配置化） | ✅ |
+| 答案质量 K3 批 2（引用校验 + 拒答分级 + 命中阈值 0.1→0.40） | ✅ |
 | 可观测性与错误提示 K8（日志可配 + request-id + 静默点开口 + 前端错误归一化） | ✅ |
 | 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
-| 答案质量 K3 批 2（引用校验 / 拒答分级 / 阈值）/ K4 摄取异步化 | ⬜ |
+| K4 摄取异步化 | ⬜ |
 
-**后端 273 测试全绿**（160 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 291 测试全绿**（178 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。

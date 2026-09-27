@@ -16,13 +16,14 @@
 | 二 | 存储切换 + 后端 API（仪表盘） | 16 | 16 ✅ |
 | 三 | 前端 Vue3（外壳） | 5 | 5 ✅ |
 | 四 | 管理后台（运营中心） | 5 | 5 ✅ |
-| 五 | 内容质量与性能（K 系列） | 10 | 5 ✅ / 1 🔨（K3 批 1）/ 4 ⬜ |
-| **合计** | | **45** | **40 ✅ / 1 🔨 / 4 ⬜** |
+| 五 | 内容质量与性能（K 系列） | 10 | 6 ✅ / 4 ⬜ |
+| **合计** | | **45** | **41 ✅ / 4 ⬜** |
 
-> **你现在位置**：功能面 35 块全绿；K0/K1/K2 已完成，**K3 批 1（答案质量）已完成**——
-> 答案现在会说「根据《供应商管理制度》4.2 节」，且整轮平均耗时降到 4.1s。
-> **K8（可观测性）与 K9（前端测试框架）也已补齐** —— 后者落地当天就照出一个从未生效的参数（bugfix-log #40）。
-> 剩下 K3 批 2（引用校验 / 拒答分级 / 阈值）与 K4–K7。
+> **你现在位置**：功能面 35 块全绿；K0/K1/K2/K3 已完成，**K8（可观测性）与 K9（前端测试框架）**也已补齐 ——
+> K9 落地当天就照出一个从未生效的参数（bugfix-log #40）。
+> **K3 批 2 收口（2026-09-26）**：引用校验（`citation_issues`）、拒答三级分级、
+> 命中阈值 0.1 → 0.40（库外噪声每问 5 条 → 1 条，库内一条不丢）。
+> 剩下 K4–K7。
 
 ---
 
@@ -119,13 +120,22 @@
 > 顺带照出并修掉三个既有缺陷：**推理 token 挤空正文**（第 9 问实测空答案）、
 > 空答案直达前端、prompt 只要求标编号所以模型从不写文档名。
 > 详见 [`docs/eval/README.md`](eval/README.md)。
+>
+> **K3 批 2 已完成（2026-09-26）**，三件事各自独立验收：
+> ①**引用编号校验** —— 新增 `citation_issues(answer, source_count)`，贯通 dataclass → API → SSE `done` 事件，
+> 越界时记 WARNING（此前模型写出 `[9]` 而只有 5 块时服务端完全无痕，前端是个点不开的假引用）；
+> ②**拒答三级分级** —— 从一刀切改为「完全无关 / 只覆盖一部分 / 相互冲突」，
+> 真模型探针三场景全部落到设计分支（冲突时并列双方而非擅自选边）；
+> ③**命中阈值 0.1 → 0.40** —— 先量后改：库内 rank-5 raw 余弦最低 **0.469**、库外最高 **0.371**，
+> 0.40 落在间隙内不贴边。A/B 实测**库内来源一条不丢、库外噪声 15 条 → 1 条**。
+> 详见 [`docs/eval/k3b2-before.md`](eval/k3b2-before.md) / [`k3b2-after.md`](eval/k3b2-after.md)。
 
 | 块 | 功能 | 需求卡片 | 状态 |
 |---|---|---|---|
 | **K0** | **真实 Embedding 接入（K3 前置）**：新增 `bailian` 供应商槽位（阿里云百炼官方，与 LLM 走的中转站彻底解耦）+ `rerank_provider` 独立槽位 + 百炼原生 rerank 实现（compatible 层没有 rerank）+ embedding 返回维度自检 + `tests/conftest.py` 切断单测对 `.env` 的依赖 | [K0](requirements/K0-real-embedding.md) | ✅ |
 | **K1** | **真流式生成**：`LLMProvider.stream()` + `RagPipeline.ask_stream()` 事件化 + `/ask/stream` 去掉"先同步生成再假打字机" + 前端阶段文案 | [K1](requirements/K1-streaming-generation.md) | ✅ |
 | **K2** | **管线单例与连接复用**：lifespan 装配 `app.state.rag` / `app.state.ingestion`，砍掉每请求重建（httpx 客户端构造 + PG 连接池）| [K2](requirements/K2-pipeline-singleton.md) | ✅ |
-| **K3** | **答案质量**：Prompt 重构（system/user 分离 + 上下文带文档名/块号）+ 生成参数配置化 + 推理 token 截断防护 —— **批 1 已完成**；引用编号校验 + 拒答分级留批 2 | [K3](requirements/K3-answer-quality.md) | 🔨 批 1 ✅ |
+| **K3** | **答案质量**：Prompt 重构（system/user 分离 + 上下文带文档名/块号）+ 生成参数配置化 + 推理 token 截断防护 + **批 2：引用编号校验 `citation_issues` / 拒答三级分级 / 命中阈值 0.1→0.40** | [K3](requirements/K3-answer-quality.md) | ✅ |
 | **K4** | **摄取异步化**：上传即返回 + `IngestionJob` 进度表 + 后台线程池 + 重试接口 + 前端进度条 | [K4](requirements/K4-async-ingestion.md) | ⬜ |
 | **K5** | **答案反馈闭环**：对话页赞/踩 + 可选原因标签 + 落库关联 `ChatMessage`（J2 已预留挂载点）| 待开卡 | ⬜ |
 | **K6** | **问答缓存**：精确命中（KB+query+mode+top_k）→ 语义命中（embedding 余弦 > 0.95）| 待开卡 | ⬜ |

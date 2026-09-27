@@ -165,6 +165,7 @@ tests/                   # 251 个离线单测（mock 供应商，无需网络�
 | `EMBEDDING_PROVIDER` | 留空 / `bailian` / `mock` | 插槽级覆盖——「LLM 走中转站 + Embedding 走百炼官方」就是靠它 |
 | `EMBEDDING_MODEL` | 默认 `text-embedding-v3` | 换模型必须同步 `EMBEDDING_DIM`（不符会在首次调用时明确报错）并重建向量集合 |
 | `RETRIEVAL_MODE` | `vector` / `hybrid` | 精确词/型号召回差就切 `hybrid` |
+| `SIMILARITY_THRESHOLD` | 默认 `0.40` | 低于此余弦分的切片不算命中（不进来源、不进 prompt、不进日志统计）。默认值由实测定的：库内 rank-5 最低 **0.469**、库外最高 **0.371**，取 0.40 落在间隙内 —— 库内一条不丢、库外噪声每问 5 条 → 1 条。**换语料或换 embedding 后请重测**（`scripts/k3_eval.py`） |
 | `CHUNK_STRATEGY` | `fixed` / `structure` / `structure+semantic` | 制度手册类用 `structure`——标题落在块首，答案才能引「4.2 节」。**改后需重新摄取才生效** |
 | `LLM_MAX_TOKENS` | 默认 `2048` | ⚠️ **含推理 token** 的总预算。推理模型的 `reasoning_tokens` 算在里面，给 1024 会把正文挤空（实测过） |
 | `LLM_ENABLE_THINKING` | 留空 / `true` / `false` | 留空 = 不下发该字段（最兼容）。`false` 关掉思维链：实测整轮 10.6s/问 → **4.1s/问**，正文还更完整 |
@@ -175,11 +176,12 @@ tests/                   # 251 个离线单测（mock 供应商，无需网络�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 273 个用例，全程离线
+python -m pytest tests/ -v --tb=short       # 后端 291 个用例，全程离线
 cd frontend && npm test                     # 前端 51 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
+（当前 `291 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
 
 前端测试覆盖五层：纯函数（`src/api/error.ts`）、Pinia store、axios 拦截器、路由守卫、组件挂载
 （真实挂载登录页）。**前端用例大多是为 K8 已修缺陷补的回归测试**，因此 K9 落地时对其中三条做了
@@ -203,14 +205,14 @@ cd frontend && npm test                     # 前端 51 个用例（vitest + jsd
 和**每次提问都要等**（流式是模拟的、每请求重建模型连接）。而这两件事有个共同前提：
 **检索侧得是真的** —— embedding 一直是 mock（64 维哈希词袋，无语义），召回质量本身不可评测，
 prompt 改完了也看不出好坏。K0 就是来解这个前置的。
-K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2、K8、K9 已完成，K3 批 1 已完成**：
+K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2、K3、K8、K9 已完成**：
 
 | 块 | 内容 | 一句话动机 |
 |---|---|---|
 | K0 ✅ | 真实 Embedding 接入（K3 前置） | 已完成：embedding 由 mock 切到阿里云百炼官方 `qwen3.7-text-embedding`（1024 维真语义向量），LLM 仍走中转站 —— 三插槽彻底解耦；顺带修掉 rerank 被 LLM 槽位绑死的缺陷（百炼 rerank 不在兼容层，走原生端点）、补 embedding 维度自检、补 `tests/conftest.py` 切断单测对本机 `.env` 的依赖。实测库内命中 top1 **0.70–0.79** vs 库外 **0.28–0.32**，分数首次语义可分 |
 | K1 ✅ | 真流式生成 | 已完成：原先是"先等完整答案再假打字机"，真模型下首字前空白 3–10 秒；现改为 `stage → sources → token → done` 真流式，来源先于答案可见，桩模型实测首字节 1.54s → 53ms |
 | K2 ✅ | 管线单例与连接复用 | 已完成：原先是每请求重建管线（实测白送 **653ms**，根因是 httpx 每个 client 要建 3 个 SSLContext）；现改为 lifespan 装配一次、请求期取用，摄取与问答共用同一份向量库与 embedding，顺带补 PG `pool_pre_ping` 与 OpenAI 显式 timeout/retries |
-| K3 🔨 | 答案质量（Prompt + 引用） | **批 1 已完成**：system 规则走独立 `system` 消息、文档名解析提前到生成之前（每块带「[1]（来源：xxx.pdf · 第 3 块）」）、生成参数配置化。13 问机器评测 **答案点名文档 0/10 → 10/10**、库外 3/3 正确拒答、均耗 7.7s → **4.1s**；顺带照出并修掉「推理 token 挤空正文」等 3 个既有缺陷。引用校验 / 拒答分级留批 2 |
+| K3 ✅ | 答案质量（Prompt + 引用 + 阈值） | 已完成。**批 1**：system 规则走独立 `system` 消息、文档名解析提前到生成之前（每块带「[1]（来源：xxx.pdf · 第 3 块）」）、生成参数配置化 —— 13 问机器评测 **答案点名文档 0/10 → 10/10**、均耗 7.7s → **4.1s**，顺带照出并修掉「推理 token 挤空正文」等 3 个缺陷。**批 2**：①引用编号校验 `citation_issues`（模型写出不存在的 `[9]` 时不再无痕，贯通 API 与 SSE `done`）；②拒答三级分级（完全无关 / 只覆盖一部分 / 两资料冲突，冲突时并列双方而非擅自选边）；③命中阈值 0.1 → **0.40** —— 先量后改（库内 rank-5 raw 余弦最低 0.469、库外最高 0.371），A/B 实测**库内来源一条不丢、库外噪声每问 5 条 → 1 条** |
 | K4 | 摄取异步化 | 上传全程同步阻塞，大文件会撞超时且无进度、不可重试 |
 | K8 ✅ | 可观测性与错误提示 | 已完成：日志原本只覆盖 6/34 个模块，**后端 12 处 + 前端 8 处静默失败**。`LOG_LEVEL` 可配（原先 `propagate=False`，连 pytest 的 `caplog` 都收不到 app 日志）、`X-Request-ID` 贯穿每个响应与每一行日志、12 项定级为缺陷并修复（含「摄取 step4 无 try/except → 文档永久卡在 `processing`」与「422 的数组 detail 在前端渲染成 `[object Object]`」） |
 | K9 ✅ | 前端测试框架 | 已完成：`frontend/package.json` 原先只有 `vue-tsc && vite build`，**K8 的前端改动无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。现引入 vitest + jsdom + @vue/test-utils，**51 个用例覆盖纯函数 / store / 拦截器 / 路由守卫 / 组件挂载**；vitest 钉 3.x 是为了迁就 vite 5。补上框架当天，新写的第一个断言就照出一个从未生效的参数（`bugfix-log.md` #40） |
