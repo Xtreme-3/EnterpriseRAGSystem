@@ -673,3 +673,25 @@ def test_default_similarity_threshold_separates_unrelated_from_related() -> None
     assert t > 0.375, f"阈值 {t} 落在库外噪声带内（实测库外最高 0.375），无关切片会进 prompt"
     assert t < 0.512, f"阈值 {t} 会切掉库内最弱的支撑切片（实测 rank-5 最低 0.512）"
 
+
+
+# ---------------------------------------------------------------- §10 输出形态护栏
+
+
+def test_system_prompt_requires_plain_text_answer() -> None:
+    """system 规则必须明确要求**纯文本**输出，并点名禁用 markdown 标记。
+
+    背景：前端没有引入任何 markdown 渲染器（全仓无 `marked` / `markdown-it` /
+    `v-html`），模型写 `**30 天无理由退货**` 就会在界面上原样显示成星号。
+    这与「语料生成器把星号写进 PDF」是**同一类用户可见症状、不同来源**：
+    那边是脏数据入库（已修，见 `docs/bugfix-log.md` #41），
+    这边是**模型自己的排版习惯**，只能在 prompt 侧约束。
+
+    ⚠️ 改这条规则后必须重跑 `scripts/k3_eval.py` —— 它改的是生成侧，
+    会影响点名率与答案形态。
+    """
+    assert "纯文本" in SYSTEM_PROMPT, "未要求纯文本输出，模型会继续输出 markdown 标记"
+    for mark in ("**", "*", "#"):
+        assert mark in SYSTEM_PROMPT, (
+            f"prompt 未点名禁用 {mark}；只写「不要用复杂格式」模型不会照做"
+        )

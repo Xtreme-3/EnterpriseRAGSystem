@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（328 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
+- **测试**：后端 pytest + httpx + TestClient（329 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
 
 ## 目录结构
 
@@ -100,6 +100,10 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   `REFUSAL_MARK` 都靠这个子串判分，改文案会把评测改坏（有测试钉住）
 - **越界引用要留痕**：`citation_issues(answer, source_count)` 校验答案里的 `[N]` 是否真存在，
   非空时 `ask()` / `ask_stream()` 都记 WARNING。正则带 `(?!\()` 排除 markdown 链接
+- **答案必须要求纯文本**（`SYSTEM_PROMPT` 第 6 条）：前端**没有** markdown 渲染器
+  （全仓无 `marked` / `markdown-it` / `v-html`），模型写 `**加粗**` 就会在界面上
+  原样显示成星号。规则里要**点名**禁用 `**` / `*` / `#`，只写「不要用复杂格式」
+  模型不会照做。改这条要重跑 `scripts/k3_eval.py`（改的是生成侧）
 - **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：实测库内 rank-5 raw 余弦最低 0.512、
   库外最高 0.375（2026-09-27 语料改写后重测；改写前为 0.469 / 0.371），0.40 落在间隙内。
   **换语料、加文档或换 embedding 后必须重测**：`python scripts/measure_similarity_margin.py --kb 1`
@@ -271,4 +275,4 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
 | K4 摄取异步化 | ⬜ |
 
-**后端 328 测试全绿**（215 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 329 测试全绿**（216 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
