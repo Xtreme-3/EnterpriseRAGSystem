@@ -654,18 +654,22 @@ def test_system_prompt_still_requires_naming_source_and_no_fabrication() -> None
 def test_default_similarity_threshold_separates_unrelated_from_related() -> None:
     """默认阈值必须落在「库外噪声带」与「库内最弱支撑切片」之间的间隙里。
 
-    实测（kb_1：4 份文档 / 44 切片，hybrid，13 问固定问题集，与 `scripts/k3_eval.py` 同源）：
+    实测（kb_1，hybrid 无关，本测试只看**向量路** raw 余弦，13 问固定问题集与
+    `scripts/k3_eval.py` 同源，探针为 `scripts/measure_similarity_margin.py`）：
 
-    - **库外**问题的 raw 余弦最高 **0.371**（3 问共 15 条候选里 13 条 ≤ 0.35）
-    - **库内**问题的 raw 余弦最低 **0.469**（rank-5，仍是有用的支撑切片；
-      注意 K0 报的「库内 top1 0.70–0.79」只是第 1 名，第 5 名会低得多）
+    - **第一次测量**（4 份文档 / 44 切片）：库外最高 **0.371**，库内 rank-5 最低 **0.469**
+    - **语料改写后重测**（4 份文档 / 63 切片，2026-09-27）：库外最高 **0.375**，
+      库内 rank-5 最低 **0.512**
 
-    旧默认 0.1 太低：库外问题照样拿满 5 条噪声进 prompt（拒答全靠模型自觉）。
+    注意 K0 报的「库内 top1 0.70–0.79」只是第 1 名；第 5 名会低得多，
+    不能拿第 1 名推断安全边界。旧默认 0.1 太低：库外问题照样拿满 5 条噪声进 prompt
+    （拒答全靠模型自觉）。
 
-    ⚠️ 这两个边界值是**本演示语料 + 当前 embedding** 的实测结果，
-    换语料或换 embedding 供应商后必须重测（跑 `scripts/k3_eval.py` 与分数分布探针）。
+    ⚠️ 这两个边界值是**本演示语料 + 当前 embedding** 的实测结果。换语料、加文档或
+    换 embedding 供应商后**必须重跑 `scripts/measure_similarity_margin.py`**；
+    语料改写这一轮正是因为改了语料才去重测（间隙反而变宽，0.40 无需调整）。
     """
     t = Settings(_env_file=None).similarity_threshold
-    assert t > 0.371, f"阈值 {t} 落在库外噪声带内，无关切片会进 prompt"
-    assert t < 0.469, f"阈值 {t} 会切掉库内最弱的支撑切片（实测 rank-5 最低 0.469）"
+    assert t > 0.375, f"阈值 {t} 落在库外噪声带内（实测库外最高 0.375），无关切片会进 prompt"
+    assert t < 0.512, f"阈值 {t} 会切掉库内最弱的支撑切片（实测 rank-5 最低 0.512）"
 

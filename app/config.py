@@ -73,8 +73,11 @@ class Settings(BaseSettings):
     # 0.40 落在两者之间的间隙里，且不贴任何一边（贴边会过拟合这份小语料）：
     #   库内上下文**一条不丢**；库外噪声从每问 5 条压到 1 条
     #   （剩下的 1 条来自关键词路，它不经过阈值 —— 见 hybrid.fuse_hybrid）。
+    # 语料改写后重测（4 份文档 / 63 切片，2026-09-27）：
+    #   库外最高 0.375，库内 rank-5 最低 0.512 —— 间隙变宽，0.40 无需调整。
     # 旧默认 0.1 太低：库外问题照样拿满 5 条噪声进 prompt，拒答全靠模型自觉。
-    # ⚠️ 换语料或换 embedding 供应商后必须重测（scripts/k3_eval.py + 分数分布探针）。
+    # ⚠️ 换语料、加文档或换 embedding 供应商后必须重测：
+    #   `python scripts/measure_similarity_margin.py --kb 1`（直接判定当前阈值是否仍有效）。
     similarity_threshold: float = 0.40
     vector_store: str = "chroma"  # chroma | pgvector
     # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索

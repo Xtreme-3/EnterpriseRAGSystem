@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（291 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
+- **测试**：后端 pytest + httpx + TestClient（328 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
 
 ## 目录结构
 
@@ -100,13 +100,39 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   `REFUSAL_MARK` 都靠这个子串判分，改文案会把评测改坏（有测试钉住）
 - **越界引用要留痕**：`citation_issues(answer, source_count)` 校验答案里的 `[N]` 是否真存在，
   非空时 `ask()` / `ask_stream()` 都记 WARNING。正则带 `(?!\()` 排除 markdown 链接
-- **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：实测库内 rank-5 raw 余弦最低 0.469、
-  库外最高 0.371，0.40 落在间隙内。**换语料或换 embedding 后必须重测**，
-  否则这个默认值就是过拟合当前这 4 份文档。注意阈值只在**向量路**生效
-  （`fuse_hybrid` 会重新归一化，关键词路 `search_lexical` 不过滤）
+- **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：实测库内 rank-5 raw 余弦最低 0.512、
+  库外最高 0.375（2026-09-27 语料改写后重测；改写前为 0.469 / 0.371），0.40 落在间隙内。
+  **换语料、加文档或换 embedding 后必须重测**：`python scripts/measure_similarity_margin.py --kb 1`
+  会直接判定当前阈值是否仍落在间隙里（退出码 1 = 不成立），否则这个默认值就是过拟合当前语料。
+  注意阈值只在**向量路**生效（`fuse_hybrid` 会重新归一化，关键词路 `search_lexical` 不过滤）
 - 评测脚本：`python scripts/k3_eval.py --kb 1 --out docs/eval/k3-after.md`
   （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因。
   **它不需要 PostgreSQL** —— `VECTOR_STORE=chroma` 时走 SQLite `data/rag.db`）
+
+### 语料改动流程（改 `docs/sample-docs/` 前必读）
+
+演示知识库的语料是**生成出来的**，不是手写死的：`docs/sample-docs/*.md` 是源，
+`scripts/generate_sample_docs.py` 转成同目录的 PDF/DOCX，PDF 再被摄取进 `kb_1`。
+**改语料必须走完这四步，少一步就会留下不一致：**
+
+1. 改 `docs/sample-docs/*.md`（**不要**改 PDF，它是产物）
+2. `python scripts/generate_sample_docs.py` 重新生成（`fpdf2` 装在**系统 Python** 里，
+   `.venv` 里没有，所以用系统解释器跑）
+3. `python scripts/reingest_sample_docs.py --kb 1` 重新摄取
+   （**先删后传**：同名文件不会覆盖旧切片，只会多出一份，检索时新旧两版同时被召回）
+4. `python scripts/measure_similarity_margin.py` + `python scripts/k3_eval.py` 双回归
+
+两条已经踩过的坑：
+
+- **生成器里所有分支都要过 `clean_inline()`**。原实现只有「普通段落」分支清理行内标记，
+  表格行 / 引用行提前 `continue` 绕过了它，结果 `**30 天无理由退货**` 的星号原样进了 PDF、
+  再进了向量库。现在 md 只被 `parse_md_blocks()` 解析一次，渲染器只消费 block，堵死了绕过路径。
+  护栏：`tests/test_sample_docs_render.py`（含对已生成 PDF 的端到端断言）
+- **「元数据块」不要复述正文关键词**。文档控制页 / 修订记录 / 目录这类块在**向量路**上
+  通常无害（语义太泛、相似度上不去），但在**关键词路**上是天然的高分选手，混合检索会把
+  它顶到第 1，而它**不含答案**。所以修订记录写「新增第四章」而不是「补充皮具类五金件标准」。
+  判定方法：`POST /api/kbs/{id}/inspect` 分别用 `mode=vector` 与 `mode=hybrid` 跑同一问，
+  **两路名次差异大的块就是可疑块**。详见 `docs/bugfix-log.md` #41-A
 
 ## 日志与错误提示（K8，写日志 / 改错误处理前必读）
 
@@ -245,4 +271,4 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
 | K4 摄取异步化 | ⬜ |
 
-**后端 291 测试全绿**（178 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 328 测试全绿**（215 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
