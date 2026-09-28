@@ -111,8 +111,13 @@ IngestionJob:
 - [ ] 并发：同时上传 3 个文件，全部成功（执行器上限内排队，不互相覆盖状态）
 - [ ] 重启自愈：手动把某 job 置 `processing` 后重启应用 → 该 job 变 `failed`
 - [ ] 同步 `ingest_file()` 行为与返回结构完全不变（回归）
-- [ ] 现有 226 测试全绿（注意：依赖"上传后立即 indexed"的用例需改为轮询等待）
+- [ ] 现有 **392** 测试全绿（注意：依赖"上传后立即 indexed"的用例需改为轮询等待）
 - [ ] `npm run build` 通过
+- [ ] **batch 调参**（本积木的附赠项，一行改动）：`_EMBED_BATCH` 从 16 提到 embedding API
+      的单次上限（百炼为 25），并附一条实测对比。⚠️ 异步化只让 **UI 不阻塞**、
+      **不减少总时长** —— 这两件事别混在一个数字里归因。砍总时长靠的是减少串行往返次数
+- [ ] `scripts/reingest_sample_docs.py` 仍然可用：上传后轮询到 indexed 再报 `chunk_count`
+      （它现在直接读上传响应的 `chunk_count`，异步化后会静默打印成 `None`）
 
 ## 依赖
 
@@ -130,6 +135,20 @@ IngestionJob:
 - 不做嵌入结果的磁盘缓存（属 K6）
 
 ## 失败点 / 风险
+
+- **`POST /documents` 的返回契约会变（200 → 202），下游影响面在开工前已点清**：
+
+  | 受影响处 | 现状 | K4 后要改成 |
+  |---|---|---|
+  | 6 个测试文件共 **15 处**断言 `"indexed"` | 上传后立即断言 | 轮询至 indexed |
+  | `frontend/src/views/DocList.vue` | 上传后直接刷新列表 | 加轮询 + 进度列 |
+  | `scripts/reingest_sample_docs.py:272` | 直接读响应的 `chunk_count` | 轮询到 indexed 再读 |
+  | 本卡片 | 原写"226 测试全绿" | 已更新为 392 |
+
+  涉及文件：`test_documents` / `test_pipeline` / `test_diagnostics` /
+  `test_doc_health` / `test_answer_quality` / `test_semantic_chunker`。
+  这些用例自己写的是"上传 → 断言 indexed"，改异步后语义没变、只是要等，
+  所以统一换成一个 `wait_indexed()` 辅助函数即可，不需要逐条重写。
 
 - **测试大面积受影响**（最大工作量所在）。现有用例大概是"上传 → 断言 indexed"，
   改成异步后必须变成"上传 → 轮询至 indexed"。→ 建议在测试里封装
