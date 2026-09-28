@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（329 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
+- **测试**：后端 pytest + httpx + TestClient（389 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
 
 ## 目录结构
 
@@ -104,29 +104,48 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   （全仓无 `marked` / `markdown-it` / `v-html`），模型写 `**加粗**` 就会在界面上
   原样显示成星号。规则里要**点名**禁用 `**` / `*` / `#`，只写「不要用复杂格式」
   模型不会照做。改这条要重跑 `scripts/k3_eval.py`（改的是生成侧）
-- **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：实测库内 rank-5 raw 余弦最低 0.512、
+- **`SIMILARITY_THRESHOLD` 默认 0.40，不是拍的**：kb_1 实测库内 rank-5 raw 余弦最低 0.512、
   库外最高 0.375（2026-09-27 语料改写后重测；改写前为 0.469 / 0.371），0.40 落在间隙内。
   **换语料、加文档或换 embedding 后必须重测**：`python scripts/measure_similarity_margin.py --kb 1`
   会直接判定当前阈值是否仍落在间隙里（退出码 1 = 不成立），否则这个默认值就是过拟合当前语料。
   注意阈值只在**向量路**生效（`fuse_hybrid` 会重新归一化，关键词路 `search_lexical` 不过滤）
+- **kb_2 上这个阈值不是判据，只是粗筛**：`--kb 2 --questions-file docs/eval/questions-kb2.json`
+  实测噪声上限 0.4726 **高于**库内最弱 0.4652（两条分布重叠）——因为它问的是 kb_1 的内容、
+  与人事财务同属一个语义域。**不要试图靠调高阈值解决**：那会连带筛掉库内最弱那问。
+  实测该噪声进了 prompt、LLM 仍正确拒答（3/3），说明**拒答由模型把守、不是由阈值把守**。
+  rerank 也救不了（实测指标一项没变、延迟 +21%）。真要收紧得改策略，见 `docs/roadmap.md`
 - 评测脚本：`python scripts/k3_eval.py --kb 1 --out docs/eval/k3-after.md`
   （13 问固定问题集，机器判定命中/点名/拒答/耗时；对新旧代码都能跑，用于 A/B 归因。
   **它不需要 PostgreSQL** —— `VECTOR_STORE=chroma` 时走 SQLite `data/rag.db`）
+  评别的库要**另写问题集**并用 `--questions-file` 指过去（内置 13 问只对应 kb_1，
+  换库跑必然全错）；加载入口只有 `k3_eval.load_questions` 一处，阈值脚本也从那里取
 
 ### 语料改动流程（改 `docs/sample-docs/` 前必读）
 
-演示知识库的语料是**生成出来的**，不是手写死的：`docs/sample-docs/*.md` 是源，
-`scripts/generate_sample_docs.py` 转成同目录的 PDF/DOCX，PDF 再被摄取进 `kb_1`。
+演示语料是**生成出来的**，不是手写死的：`docs/sample-docs/*.md` 是源，
+`scripts/generate_sample_docs.py` 转成同目录的 PDF/DOCX，产物再被摄取进知识库。
 **改语料必须走完这四步，少一步就会留下不一致：**
 
-1. 改 `docs/sample-docs/*.md`（**不要**改 PDF，它是产物）
-2. `python scripts/generate_sample_docs.py` 重新生成（`fpdf2` 装在**系统 Python** 里，
-   `.venv` 里没有，所以用系统解释器跑）
-3. `python scripts/reingest_sample_docs.py --kb 1` 重新摄取
+1. 改 `docs/sample-docs/*.md`（**不要**改 PDF/DOCX，它们是产物）
+2. `python scripts/generate_sample_docs.py [--only 关键字]` 重新生成
+   （`fpdf2` 装在**系统 Python** 里，`.venv` 里没有，所以用系统解释器跑）
+3. `python scripts/reingest_sample_docs.py --preset <分组>` 重新摄取
    （**先删后传**：同名文件不会覆盖旧切片，只会多出一份，检索时新旧两版同时被召回）
 4. `python scripts/measure_similarity_margin.py` + `python scripts/k3_eval.py` 双回归
 
-两条已经踩过的坑：
+**两个库、不要串** —— 语料目录是平的，而 `--kb 1` 配默认 glob `*.pdf` 现在能匹配到
+**7 份**，直接跑会把本该进 kb_2 的人事/财务/税务三份也灌进 kb_1。所以分组固化在
+`scripts/reingest_sample_docs.py` 顶部的 `CORPUS_GROUPS` 里，**新增语料先登记分组再用 `--preset` 跑**：
+
+| 分组 | 目标库 | 语料 |
+|---|---|---|
+| `business` | kb_1「演示知识库」 | 产品手册 / 供应商管理制度 / 跨境物流指南 / 跨境售后政策（4 份 pdf） |
+| `hr-finance` | kb_2「人事与财务制度」 | 员工手册（docx）/ 财务报销与差旅（md）/ 出口退税（pdf） |
+
+kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 md 解析器缺位的 bug
+（`docs/bugfix-log.md` #42）。
+
+三条已经踩过的坑：
 
 - **生成器里所有分支都要过 `clean_inline()`**。原实现只有「普通段落」分支清理行内标记，
   表格行 / 引用行提前 `continue` 绕过了它，结果 `**30 天无理由退货**` 的星号原样进了 PDF、
@@ -137,6 +156,11 @@ ingest = get_ingestion(request)     # IngestionPipeline，与 rag 共用向量�
   它顶到第 1，而它**不含答案**。所以修订记录写「新增第四章」而不是「补充皮具类五金件标准」。
   判定方法：`POST /api/kbs/{id}/inspect` 分别用 `mode=vector` 与 `mode=hybrid` 跑同一问，
   **两路名次差异大的块就是可疑块**。详见 `docs/bugfix-log.md` #41-A
+- **文本清理分两段，时机别搞反**：标题的 `#` 是**给切分器看的**结构信号
+  （`chunker._RE_MD_HEADING` 靠它认章节边界），却是**给模型看的**噪声。
+  所以解析阶段保留、**切分之后**才由 `parsers.clean_chunks()` 剥掉。
+  提前剥会把相邻章节并成一块 —— 单测能抓（kb_1/kb_2 的评测抓不到，因为我们的语料标题
+  恰好都带编号）。详见 `docs/bugfix-log.md` #42-A
 
 ## 日志与错误提示（K8，写日志 / 改错误处理前必读）
 
@@ -275,4 +299,4 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
 | K4 摄取异步化 | ⬜ |
 
-**后端 329 测试全绿**（216 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 389 测试全绿**（276 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。

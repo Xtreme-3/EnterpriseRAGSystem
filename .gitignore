@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+# pytest 的 --junitxml 输出（沙箱会吃掉 -q 的汇总行，要准计数得读 XML）
+.pytest-tmp/
 
 # 环境变量（含密钥）
 .env

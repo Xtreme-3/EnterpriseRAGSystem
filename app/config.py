@@ -75,9 +75,20 @@ class Settings(BaseSettings):
     #   （剩下的 1 条来自关键词路，它不经过阈值 —— 见 hybrid.fuse_hybrid）。
     # 语料改写后重测（4 份文档 / 63 切片，2026-09-27）：
     #   库外最高 0.375，库内 rank-5 最低 0.512 —— 间隙变宽，0.40 无需调整。
+    # 新增 kb_2（3 份人事财务语料 / 75 切片，2026-09-28）后重测，**两条分布重叠**：
+    #   库外最高 0.4726（"美国站的退货窗口是多少天？"，属 kb_1 的内容）
+    #   库内最弱 0.4652（"试用期最长可以约定多久？"）
+    # 即：**没有任何单一阈值能干净分离 kb_2 的两次分布**。但这不构成缺陷，理由有二：
+    #   1) 调高阈值（>0.4726）会把库内最弱那条一起筛掉 → 那问必然召回失败，得不偿失；
+    #   2) 实测该噪声虽被召回（5 条来源进了 prompt），LLM 仍正确答「未找到相关信息」，
+    #      拒答 3/3 全对 —— 拒答由**模型**把守，不是由阈值把守。
+    # 0.40 在 kb_2 上的定位因此是「召回优先的粗筛」，不是判据。真要收紧，方向是
+    # 双阈值（召回线 + 强相关线）或 rerank，不是继续拧这一个数 —— 见 docs/roadmap.md。
     # 旧默认 0.1 太低：库外问题照样拿满 5 条噪声进 prompt，拒答全靠模型自觉。
     # ⚠️ 换语料、加文档或换 embedding 供应商后必须重测：
-    #   `python scripts/measure_similarity_margin.py --kb 1`（直接判定当前阈值是否仍有效）。
+    #   `python scripts/measure_similarity_margin.py --kb 1`
+    #   `python scripts/measure_similarity_margin.py --kb 2 --questions-file docs/eval/questions-kb2.json`
+    #   （退出码 1 = 当前阈值不落在间隙内）
     similarity_threshold: float = 0.40
     vector_store: str = "chroma"  # chroma | pgvector
     # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索
