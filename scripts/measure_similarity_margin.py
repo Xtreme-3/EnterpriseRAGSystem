@@ -7,12 +7,25 @@
 
 本项目实测记录（每换一次语料都要在此追加一行）：
 
-===================  ===========  ==========================  ======
-语料版本              库外最高     库内 rank-5 最低            采用阈值
-===================  ===========  ==========================  ======
-4 份 / 44 切片        0.371        0.469                       0.40
-4 份 / 63 切片        见本次输出   见本次输出                  本次校验
-===================  ===========  ==========================  ======
+=================================  ===========  =================  ======
+语料                                库外最高     库内 rank-5 最低    结论
+=================================  ===========  =================  ======
+kb_1 4 份 / 44 切片                 0.371        0.469              0.40 有效
+kb_1 4 份 / 63 切片                 0.3750       0.5119             0.40 有效
+kb_2 3 份 / 75 切片                 0.4726       0.4652             **重叠，见下**
+=================================  ===========  =================  ======
+
+**kb_2 为什么重叠、为什么仍然不改阈值**：库外最高分来自「美国站的退货窗口是多少天？」
+（0.4726）—— 它问的是 kb_1 的业务制度，对 kb_2 是库外，但**同属电商企业制度这个语义域**，
+跟人事财务文档共享大量词汇，所以向量分压不下去。而库内最弱是「试用期最长可以约定多久？」
+（0.4652）。两者只差 0.0074。
+
+- 调高阈值到 0.4726 以上 → 库内最弱那条一起被筛掉，那问必然召回失败；
+- 调低 → 噪声更多。
+
+实测（kb_2 评测）该噪声确实被召回进了 prompt，但 LLM 仍正确拒答，**拒答 3/3 全对**。
+所以 0.40 在 kb_2 上的定位是「召回优先的粗筛」，判据不在它身上。真要收紧得改策略
+（双阈值 / rerank），不是继续拧这个数 —— 见 docs/roadmap.md。
 
 **方法**：把阈值临时置 0 取全部候选（否则被阈值筛掉的候选根本看不到），
 对每个库内问题取向量路 top-5 里最低的那个原始余弦，对每个库外问题取最高的那个。
@@ -21,6 +34,10 @@
 
     python scripts/measure_similarity_margin.py            # 用量配置的 top_k
     python scripts/measure_similarity_margin.py --kb 1 --top-k 5
+    python scripts/measure_similarity_margin.py --kb 2 --questions-file docs/eval/questions-kb2.json
+
+**必须用与被测库匹配的问题集**：内置问题集只对应 kb_1。拿它去量 kb_2，
+「库内问题」会全部量成噪声，结论完全不可信。
 
 退出码 1 表示当前阈**不**落在空隙内，需要调整 ``app/config.py`` 的默认值。
 """
@@ -39,20 +56,32 @@ from app.providers.factory import build_embedding  # noqa: E402
 from app.storage.vector_store import build_vector_store  # noqa: E402
 
 
-def _load_eval_questions():
-    """复用 k3_eval 的固定问题集，避免两处问题集漂移。"""
+def _k3_eval_module():
+    """按文件路径加载 k3_eval（scripts 不是包，不能直接 import）。"""
     spec = importlib.util.spec_from_file_location("_k3_eval", ROOT / "scripts" / "k3_eval.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    return mod.QUESTIONS
+    return mod
+
+
+def _load_eval_questions(path: str = ""):
+    """复用 k3_eval 的问题集入口，避免两处问题集漂移。
+
+    这条路径很关键：阈值必须落在**同一批问题**量出的空隙里。如果这里用一套问题、
+    评测用另一套，调出来的阈值在评测上就不成立。
+    """
+    return _k3_eval_module().load_questions(path or None)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="测 similarity_threshold 的安全空隙")
     parser.add_argument("--kb", type=int, default=1)
     parser.add_argument("--top-k", type=int, default=0, help="0 = 用配置")
+    parser.add_argument(
+        "--questions-file", default="", help="外部问题集 JSON；不传则用内置的 kb_1 基线 13 问"
+    )
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -67,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     in_kb: list[tuple[str, float]] = []
     out_kb: list[tuple[str, float]] = []
 
-    for q in _load_eval_questions():
+    for q in _load_eval_questions(args.questions_file):
         vector = embedding.embed([q.text])[0]
         hits = store.search(args.kb, vector, top_k)
         if not hits:
@@ -77,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             out_kb.append((q.text, max(h.score for h in hits)))
 
-    print(f"kb_{args.kb} | embedding={settings.embedding_model} | top_k={top_k} | 当前配置阈值={configured}\n")
+    print(f"kb_{args.kb} | embedding={settings.embedding_model} | top_k={top_k} | 当前配置阈值={configured}")
+    print(f"问题集: {args.questions_file or '内置基线（kb_1）'}\n")
 
     print(f"库外问题 {len(out_kb)} 条（最高分就是噪声上限）：")
     for text, score in sorted(out_kb, key=lambda x: -x[1]):

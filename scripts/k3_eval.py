@@ -12,6 +12,10 @@
     # 指定知识库 / 检索模式 / 重排
     python scripts/k3_eval.py --kb 1 --mode hybrid --rerank false
 
+    # 用外部问题集评另一个库（不动内置基线 13 问）
+    python scripts/k3_eval.py --kb 2 --questions-file docs/eval/questions-kb2.json \\
+        --tag kb2 --out docs/eval/kb2-baseline.md
+
 指标（全部由程序判定，不靠人眼；`hit` 只在库内问题上计入分母）：
 
 ===============  ==========================================================
@@ -24,6 +28,23 @@
 
 **脚本必须对新旧两版代码都能跑**（它用来做 A/B），所以只依赖稳定的公开接口，
 不引用 K3 新增的常量。正式评测按顺序跑两次并在同一份报告里对读。
+
+**内置问题集只对应 kb_1**：它盯的是「4 份业务制度」这个库，换库跑必然全错。
+评别的库要另写问题集文件并用 ``--questions-file`` 指过去 —— 这样老基线不会被动过，
+新旧两次评测才有可比性。
+
+问题集文件格式（``expect_docs`` 为空数组 = 库外问题，应拒答）::
+
+    {
+      "name": "kb2-hr-finance",
+      "questions": [
+        {"text": "员工年假有多少天？", "expect_docs": ["员工手册"], "note": "4.1 年假表"},
+        {"text": "竞业限制最长多久？",  "expect_docs": ["员工手册"], "note": "6.2"},
+        {"text": "库外问题占位",        "expect_docs": [],          "note": "库外"}
+      ]
+    }
+
+顶层也可以直接是 ``questions`` 那个数组。
 """
 from __future__ import annotations
 
@@ -71,6 +92,49 @@ QUESTIONS: list[Q] = [
     Q("公司年假有几天？", (), "库外·年假"),
     Q("今天天气怎么样？", (), "库外·无关"),
 ]
+
+
+def _question_from_dict(raw: object, where: str) -> Q:
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{where}: 每条问题应是对象，实际是 {type(raw).__name__}")
+    text = str(raw.get("text") or "").strip()
+    if not text:
+        raise SystemExit(f"{where}: 缺少 text 字段")
+    docs = raw.get("expect_docs") or []
+    if isinstance(docs, str):
+        raise SystemExit(f"{where}: expect_docs 应为数组（如 [\"员工手册\"]），不是字符串")
+    if not isinstance(docs, (list, tuple)):
+        raise SystemExit(f"{where}: expect_docs 应为数组")
+    return Q(
+        text=text,
+        expect_docs=tuple(str(d) for d in docs),
+        note=str(raw.get("note") or ""),
+    )
+
+
+def load_questions(path: str | Path | None = None) -> list[Q]:
+    """加载问题集。``path`` 为空（None 或空串）时返回内置的 kb_1 基线 13 问。
+
+    这是全仓唯一的问题集入口：``measure_similarity_margin.py`` 也从这里取，
+    避免两处各写一份、时间久了漂移。
+    """
+    if not path:
+        return list(QUESTIONS)
+
+    p = Path(path)
+    if not p.is_file():
+        raise SystemExit(f"问题集文件不存在：{p}")
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{p} 不是合法 JSON：{exc}")
+
+    rows = payload.get("questions") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or not rows:
+        raise SystemExit(f"{p}：找不到非空的 questions 数组")
+
+    prefix = payload.get("name", p.stem) if isinstance(payload, dict) else p.stem
+    return [_question_from_dict(r, f"{p.name}·{prefix}#{i}") for i, r in enumerate(rows, 1)]
 
 
 @dataclass
@@ -160,7 +224,15 @@ def main() -> int:
     ap.add_argument("--top-k", type=int, default=0, help="覆盖 top_k（0 = 用配置）")
     ap.add_argument("--mode", default="", help="覆盖 retrieval_mode：vector | hybrid")
     ap.add_argument("--rerank", default="", help="覆盖 rerank：true | false")
+    ap.add_argument(
+        "--questions-file",
+        default="",
+        help="外部问题集 JSON；不传则用内置的 kb_1 基线 13 问",
+    )
     args = ap.parse_args()
+
+    questions = load_questions(args.questions_file)
+    src_label = args.questions_file or "内置基线（kb_1）"
 
     settings = get_settings()
     if args.mode:
@@ -177,11 +249,12 @@ def main() -> int:
         f"embedding={settings.embedding_provider}({settings.embedding_model})\n"
         f"- 检索: mode={settings.retrieval_mode} top_k={args.top_k or settings.top_k} "
         f"threshold={settings.similarity_threshold} rerank={settings.rerank}\n"
-        f"- 切块: strategy={settings.chunk_strategy} size={settings.chunk_size}"
+        f"- 切块: strategy={settings.chunk_strategy} size={settings.chunk_size}\n"
+        f"- 问题集: {src_label}（{len(questions)} 问）"
     )
     print(note)
 
-    rs = [run_one(rag, args.kb, q, args.top_k or None) for q in QUESTIONS]
+    rs = [run_one(rag, args.kb, q, args.top_k or None) for q in questions]
     summary = summarize(rs)
 
     print("\n== 汇总 ==")
@@ -199,7 +272,13 @@ def main() -> int:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
             json.dumps(
-                {"tag": args.tag, "summary": summary, "results": [asdict(r) for r in rs]},
+                {
+                    "tag": args.tag,
+                    "kb": args.kb,
+                    "questions_source": src_label,
+                    "summary": summary,
+                    "results": [asdict(r) for r in rs],
+                },
                 ensure_ascii=False,
                 indent=2,
             ),

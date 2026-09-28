@@ -31,6 +31,63 @@ git checkout HEAD -- app/
 指标全部由程序判定，不靠人眼打分：`检索命中@1`、`检索命中@3`、`答案点名文档`、
 `正确拒答`、端到端耗时。
 
+## 多库评测（外部问题集）
+
+内置 13 问**只对应 kb_1**（4 份业务制度），拿它去评别的库必然全错。评 kb_2
+（3 份人事财务语料）用独立文件 `questions-kb2.json`，**不动内置基线**，
+两轮评测才有可比性。
+
+```powershell
+# kb_2 评测（16 问 = 13 库内 + 3 库外）
+.\.venv\Scripts\python.exe scripts\k3_eval.py --kb 2 `
+    --questions-file docs\eval\questions-kb2.json `
+    --tag kb2-baseline --out docs\eval\kb2-baseline.md --json docs\eval\kb2-baseline.json
+
+# 阈值复测（同一份问题集，否则「库内/库外」会分错类）
+.\.venv\Scripts\python.exe scripts\measure_similarity_margin.py --kb 2 `
+    --questions-file docs\eval\questions-kb2.json
+```
+
+问题集文件格式见 `scripts/k3_eval.py` 的模块 docstring；`expect_docs` 为空数组 =
+库外问题。**加载入口全仓只有一个**（`k3_eval.load_questions`），
+`measure_similarity_margin.py` 也从那里取 —— 避免两处各写一份、时间久了漂移。
+
+### kb_2 基线（2026-09-28，hybrid，threshold=0.40，rerank=false）
+
+| 指标 | 结果 |
+|---|---|
+| 检索命中@1 | **13/13** |
+| 检索命中@3 | **13/13** |
+| 答案点名文档 | **13/13** |
+| 正确拒答 | **3/3** |
+| 平均耗时 | 3483 ms |
+
+其中两条库外问题是**刻意设计的跨库串扰探针**：问「皮具类的五金件电镀厚度」与
+「美国站的退货窗口」—— 它们在 kb_1 里有答案，在 kb_2 里没有。两条都正确拒答，
+说明**检索按 kb_id 隔离是有效的**。
+
+### kb_2 的阈值分布重叠（已知，暂不改）
+
+`measure_similarity_margin.py --kb 2` 报退出码 1：噪声上限 0.4726 **高于**
+库内最弱 0.4652，两条分布重叠，**没有单一阈值能干净分离**。
+
+不改的理由与后续方向写在 `app/config.py` 的 `similarity_threshold` 注释里，
+一句话：**拒答由 LLM 把守而不是阈值**（实测噪声进了 prompt 仍正确拒答），
+而调高阈值会连带筛掉库内最弱那条。真要收紧得改策略，不是继续拧这个数。
+
+### rerank 实测（2026-09-28）
+
+同一问题集开 `--rerank true` 跑一轮：
+
+| 配置 | 命中@1 | 点名 | 拒答 | 平均耗时 |
+|---|---|---|---|---|
+| rerank=false | 13/13 | 13/13 | 3/3 | **3483 ms** |
+| rerank=true | 13/13 | 13/13 | 3/3 | 4218 ms |
+
+**指标一项没变，延迟 +21%** —— 当前 hybrid 检索已足够，`RERANK` 保持 `false`。
+这也从侧面说明 kb_2 的分布重叠不是「检索排序不好」造成的，而是**问题本身跨域**
+（问 kb_1 的内容、语义域相同），rerank 救不了。
+
 ## 结论
 
 ### 1. prompt 重构 → 答案从「资料显示」变成「根据《XX制度》4.2 节」
