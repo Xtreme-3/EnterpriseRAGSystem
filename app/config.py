@@ -177,9 +177,16 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """PostgreSQL DSN（psycopg2）。密码从 .env 读取，不进版本控制。"""
+        """PostgreSQL DSN（psycopg2）。密码从 .env 读取，不进版本控制。
+
+        驱动必须写死为 ``+psycopg2``。裸 ``postgresql://`` 的默认 DBAPI 由
+        SQLAlchemy 版本决定：2.0 走 psycopg2，2.1 起改走 psycopg（v3）。
+        而 pyproject 只声明了 ``psycopg2-binary``，一旦解析到 2.1 就会在
+        create_engine 时抛 ModuleNotFoundError: No module named 'psycopg'
+        （见 docs/bugfix-log.md #43）。
+        """
         return (
-            f"postgresql://{self.pg_user}:{self.pg_password}"
+            f"postgresql+psycopg2://{self.pg_user}:{self.pg_password}"
             f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
         )
 

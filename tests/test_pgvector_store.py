@@ -23,9 +23,19 @@ KB_2 = 900_002
 
 
 def _pg_reachable(settings: Settings) -> bool:
-    """尝试连接 PostgreSQL，失败说明环境不可用（跳过而非失败）。"""
+    """尝试连接 PostgreSQL，失败说明环境不可用（跳过而非失败）。
+
+    注意 `create_engine` 与 `connect` 要分开处理：前者只在导入 DBAPI 时失败，
+    那是**依赖缺陷**（如 #43 的 psycopg 缺失），必须让测试红掉；后者才是
+    "本机没起 PG"的环境问题。若合成一个宽泛的 except，驱动缺失会被伪装成
+    skip，pgvector 整条代码路径就此静默失去覆盖。
+    """
     try:
         engine = create_engine(settings.database_url)
+    except (ImportError, ModuleNotFoundError) as exc:
+        pytest.fail(f"postgresql 驱动不可用，检查 pyproject 依赖声明：{exc}")
+
+    try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True

@@ -1128,3 +1128,110 @@ _RE_NUM_HEADING = r"^\d+(?:\.\d+)*\s*[一-鿿]"   # 1 适用范围 / 4.2 五金�
 推论：**只测解析器输出是不够的**，必须有一条**端到端**断言（真文件 → 真切分 → 真切片）
 才能照出这类「阶段错位」的问题。
 
+---
+
+## 43. 🔴 PG DSN 不写驱动 → 容器里启动即崩（交付链路第一次被真跑才暴露）
+
+- **位置**：`app/config.py:179` `Settings.database_url`
+- **症状**：`docker compose up` 后 `api` 容器反复重启，日志结尾：
+
+```
+  File "/app/app/storage/db.py", line 23, in init_db
+    engine = create_engine(s.database_url)
+  File ".../sqlalchemy/dialects/postgresql/psycopg.py", line 497, in import_dbapi
+    import psycopg
+ModuleNotFoundError: No module named 'psycopg'
+
+ERROR:    Application startup failed. Exiting.
+```
+
+`db` 与 `web` 两个容器都是 healthy，只有 `api` unhealthy。
+
+- **根因** —— DSN 写的是**不带驱动的裸 scheme**：
+
+```python
+f"postgresql://{self.pg_user}:{self.pg_password}@{self.pg_host}:..."
+```
+
+裸 `postgresql://` 的默认 DBAPI **由 SQLAlchemy 版本决定**：
+
+| SQLAlchemy | `postgresql://` 解析到 | 本仓是否装了 |
+|---|---|---|
+| 2.0.x | `psycopg2` | ✅ `psycopg2-binary>=2.9` |
+| **2.1+** | **`psycopg`（v3）** | ❌ 未声明 |
+
+而 `pyproject.toml` 只声明了 `psycopg2-binary`、**没有 `psycopg`**。本地 `.venv` 恰好
+停在 **2.0.51**，`Dockerfile` 里 `pip install -r` 是**不锁版本**的，解析到 **2.1.1** ——
+两边方言就此分叉：同一个 `app/`，本地跑得通，容器一起就崩。
+
+- **为什么能活这么久（三个盖子叠在一起）**
+
+| # | 盖子 | 具体表现 |
+|---|---|---|
+| 1 | 本地根本不走这条路径 | `.env` 是 `VECTOR_STORE=chroma`，只有 `pgvector` 模式才执行 `create_engine(database_url)`；本机从没跑过 PG 模式 |
+| 2 | **测试把缺陷伪装成了 skip** | `tests/test_pgvector_store.py::_pg_reachable` 用 `except Exception: return False` 一把兜住 —— 驱动缺失抛的 `ModuleNotFoundError` 也被当成"本机 PG 不可达"，整模块**静默跳过**，永不报红 |
+| 3 | Docker 链路从未真跑 | `progress-log` 里 4 个交付文件写完那一条明确写着「镜像构建待本机 Docker Desktop 启动后验证」，而实际只做过 `docker compose config` 语法校验 |
+
+**这是三条各自都"合理"的省略叠出来的**：本地用自己的 `.env`、测试用宽泛的 except、
+交付只做静态校验 —— 每一处单看都说得过去，合起来就是"这条路径没人走过"。
+
+- **修复（两处，缺一不可）**
+
+| 文件 | 改动 | 作用 |
+|---|---|---|
+| `app/config.py` | `postgresql://` → **`postgresql+psycopg2://`** | 驱动写死，不再随 SQLAlchemy 版本漂移；**不新增任何依赖** |
+| `tests/test_pgvector_store.py` | `_pg_reachable` 拆成两段 except | `create_engine` 的 `ImportError/ModuleNotFoundError` → `pytest.fail`（依赖缺陷）；只有 `connect` 失败才算环境不可用 → skip |
+
+新增 `tests/test_config.py`（3 例，**离线、不需要 PG**），钉住 DSN 契约：
+
+| 用例 | 断言 |
+|---|---|
+| `test_database_url_pins_psycopg2_driver` | 必须以 `postgresql+psycopg2://` 开头，且**不得**出现裸 `postgresql://` |
+| `test_database_url_interpolates_all_pg_fields` | 五个 PG 字段逐项落到 DSN |
+| `test_database_url_engine_resolves_declared_driver` | `create_engine` 能解析出 DBAPI 且 `engine.dialect.driver == "psycopg2"` —— **依赖清单真的满足这个方言**（只导入、不建连接，故离线可跑） |
+
+- **验证（故障机理在容器里被正面复现）**
+
+| 项 | 结果 |
+|---|---|
+| 容器内，`postgresql://u:p@h:5432/d`（SQLAlchemy 2.1.1） | ❌ `ModuleNotFoundError: No module named 'psycopg'` |
+| 容器内，`postgresql+psycopg2://u:p@h:5432/d` | ✅ `driver = psycopg2` |
+| 本地新测试 | ✅ `3 passed` |
+| `docker compose up -d --wait` | ✅ `db` / `api` / `web` **三个容器全部 healthy** |
+| 经 nginx（8080）注册 → 登录 → 建库 → 传文档 → 提问 | ✅ 冒烟账号注册 200、token 148 字节、文档 24 切片 `indexed`、住宿费 6 档标准全对、sources 5 条 |
+| SSE 是否被 nginx 缓冲 | ✅ `content-type: text/event-stream`，**首字节 11ms / 总时长 23ms**（若被缓冲两者会相等），7 个事件块，先 `: ping` 再 `stage: rewriting` |
+
+- **给以后的规矩**
+
+1. **凡是要经 SQLAlchemy 连的库，DSN 必须写死驱动**（`postgresql+psycopg2://`）。
+   裸 scheme 的默认 DBAPI 是**上游版本决定的隐式契约**，而依赖清单是**不锁版本**的 ——
+   两者一对不上，就是"本地能跑、容器崩"。
+2. **「环境不可用」和「依赖/配置缺失」不能共用同一个 `except`**。
+   宽泛的 `except Exception: skip` 会把真缺陷洗成环境问题。判断口径：
+   **能不能靠"装点什么/起个服务"解决？** 能 → 环境问题（skip）；
+   是代码或依赖清单写错了 → 必须红。
+3. **交付物写完 ≠ 交付链路验证过**。`docker compose config` 只证明 YAML 语法对，
+   证明不了任何一个容器能起来。凡是"一键交付"这种承诺，**必须真跑一次**。
+
+- **附带产出：Docker 构建的网络绕行（本机环境，非缺陷）**
+
+本机 `registry-1.docker.io` 与 `dockerpull.org` 直接超时，而 Clash 的 mixed 端口
+**7897 根本没在监听**（配置里写着、进程却只有两个残留的后台服务；即使起来，Docker
+Desktop 走 WSL2 后端，流量也不经过 Windows 的 TUN 网卡，还得再配一层）。
+**解法是绕开代理**：直接从国内镜像源拉基础镜像再改回标准名，全程不改任何 Docker 配置。
+
+```bash
+M=docker.m.daocloud.io
+for spec in library/python:3.11-slim library/node:22-alpine pgvector/pgvector:pg17 \
+            library/nginx:1.27-alpine; do
+  docker pull $M/$spec
+  docker tag  $M/$spec $(echo $spec | sed 's|^library/||')
+done
+docker compose build && docker compose up -d --wait
+```
+
+实测：nginx 9 秒、四个基础镜像合计 **1 分 07 秒**、`docker compose build` 4 分 58 秒
+（其中 pip 装 chromadb 占 251 秒），改代码后重构建仅 **15 秒**（pip 层有缓存）。
+
+---
+
