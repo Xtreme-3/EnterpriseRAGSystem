@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Settings, get_settings
 from app.core.models import Chunk, Document, KnowledgeBase
 from app.ingestion.chunker import split_semantic, split_structure, split_text
-from app.ingestion.parsers import parse_file
+from app.ingestion.parsers import clean_chunks, parse_file
 from app.providers.base import EmbeddingProvider
 from app.storage.db import get_db
 from app.storage.vector_store import ChunkToIndex, VectorStore, build_vector_store
@@ -79,7 +79,9 @@ class IngestionPipeline:
         # 1. 解析 + 切片 + 向量化
         try:
             text = parse_file(p)
-            chunks = self._chunk(text)
+            # 切片后清理：markdown 的标题 `#` 必须留到这一步才剥 ——
+            # 切分器靠它认章节边界，解析阶段就剥会把相邻章节并成一块。
+            chunks = clean_chunks(self._chunk(text), p.suffix)
             if not chunks:
                 raise ValueError("文档解析后无有效内容")
             vectors = self.embedding.embed(chunks)
