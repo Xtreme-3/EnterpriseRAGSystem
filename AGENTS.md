@@ -255,6 +255,10 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
 - **前端**：`cd frontend && npm test`（vitest + jsdom，51 用例）。约定见上文「前端测试（K9）」
+- **junit 输出必须落到仓库内**（如 `.pytest-tmp/junit.xml`）：`/tmp` 在 Git Bash 与 Windows Python
+  下不是同一个路径（实际落到 `D:\tmp`），写在 `/tmp` 会找不到文件
+- **看结果以 junit XML 的计数为准**：根节点是 `<testsuites>` 包装，`root.get('tests')` 返回 `None`，
+  要遍历子节点累加；`-q` 的汇总行可能被 shell 吞掉，退出码不是可靠信号
 
 ## 环境
 
@@ -277,6 +281,23 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 - **易踩的两个点**：①健康检查端点是 `/health`，**不带** `/api` 前缀，nginx 里需单独配 location；
   ②前端 axios `baseURL` 是相对路径 `/api`，走同源反代即可，后端**没有也不需要** CORS 配置
 - SSE 流式问答在 nginx 里必须 `proxy_buffering off`，否则答案会被缓冲到最后一次性吐出
+
+### ⚠️ 本地开发与 Docker 交付是两套独立环境
+
+两条路**数据不通、检索质量不同级**。排查「知识库空的 / 查不到内容 / 答案明显变差」之前，
+先确认当前在跑哪一条 —— 走错环境会把正常现象当 bug 查：
+
+| | 本地开发（默认在用） | Docker 交付 |
+|---|---|---|
+| 前端 | `5173`（`npm run dev`） | `8080`（nginx，`${WEB_PORT:-8080}:80`） |
+| 后端 | `8000`（uvicorn） | 容器内 8000，**不映射到宿主** |
+| 元数据 | `data/rag.db`（SQLite） | 容器内 PostgreSQL |
+| 向量库 | ChromaDB | PostgreSQL + pgvector（元数据与向量共库） |
+| Embedding | 百炼 `qwen3.7-text-embedding`（**1024 维**） | **mock（64 维）** —— compose 里 `RAG_PROVIDER: mock` |
+| 数据 | 开发库，已有真实语料 | `up` 之后是**全新空库** |
+
+**结论**：在 `8080` 上看到空知识库、或答案质量明显不如本地，**都不是 bug** —— 那是空库 + mock 级检索。
+真实语料与真实 embedding 只存在于 `5173` 那条路。两条路各跑各的，不共享任何数据。
 
 ## 当前状态
 
