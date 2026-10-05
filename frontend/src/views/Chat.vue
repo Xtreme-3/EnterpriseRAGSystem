@@ -24,51 +24,68 @@
           <span>会话</span>
         </el-button>
         <span class="chat-kb-name">{{ kbName }}</span>
-        <el-radio-group v-model="mode" size="small" class="chat-mode">
-          <el-radio-button value="hybrid">混合</el-radio-button>
-          <el-radio-button value="vector">纯向量</el-radio-button>
-        </el-radio-group>
-        <!-- K7 参数栏：模型 / 检索条数 / 重排（服务端未启用重排时置灰） -->
-        <el-select
-          v-if="modelChoices.length > 1"
-          v-model="model"
-          size="small"
-          class="chat-model"
-          aria-label="模型"
-        >
-          <el-option v-for="m in modelChoices" :key="m" :label="m" :value="m" />
-        </el-select>
-        <span class="chat-param">
-          <span class="chat-param-label">条数</span>
-          <el-input-number
-            v-model="topK"
-            size="small"
-            :min="1"
-            :max="10"
-            controls-position="right"
-            class="chat-topk"
-            aria-label="检索条数"
-          />
-        </span>
-        <el-tooltip
-          content="服务端未启用重排（RERANK=false），开启不产生效果"
-          :disabled="rerankAvailable"
-          placement="top"
-        >
-          <span class="chat-param">
-            <span class="chat-param-label">重排</span>
-            <el-switch v-model="rerank" size="small" :disabled="!rerankAvailable" />
-          </span>
-        </el-tooltip>
-        <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
+        <!-- 评审 P0-4：检索参数是调参入口，不与「这是哪个知识库」同级 —— 收进参数 popover -->
+        <el-popover placement="bottom-end" :width="280" trigger="click" class="chat-params-popover">
+          <template #reference>
+            <el-button text class="chat-params-btn" aria-label="检索参数">
+              <el-icon><Setting /></el-icon>
+              <span>参数</span>
+            </el-button>
+          </template>
+          <div class="chat-params">
+            <div class="chat-param-row">
+              <span class="chat-param-label">检索模式</span>
+              <el-radio-group v-model="mode" size="small">
+                <el-radio-button value="hybrid">混合</el-radio-button>
+                <el-radio-button value="vector">纯向量</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div v-if="modelChoices.length > 1" class="chat-param-row">
+              <span class="chat-param-label">模型</span>
+              <el-select v-model="model" size="small" class="chat-model" aria-label="模型">
+                <el-option v-for="m in modelChoices" :key="m" :label="m" :value="m" />
+              </el-select>
+            </div>
+            <div class="chat-param-row">
+              <span class="chat-param-label">检索条数</span>
+              <el-input-number
+                v-model="topK"
+                size="small"
+                :min="1"
+                :max="10"
+                controls-position="right"
+                class="chat-topk"
+                aria-label="检索条数"
+              />
+            </div>
+            <div class="chat-param-row">
+              <span class="chat-param-label">重排</span>
+              <!-- 评审 P0-4：服务端未启用重排时不渲染开关，只留一行说明 ——
+                   主界面不摆永远不可用的控件 -->
+              <el-switch v-if="rerankAvailable" v-model="rerank" size="small" />
+              <span v-else class="chat-param-muted">重排未启用（服务端 RERANK=false）</span>
+            </div>
+          </div>
+        </el-popover>
       </div>
 
       <!-- 消息区 -->
       <div ref="msgContainer" class="chat-messages">
         <div v-if="messages.length === 0" class="chat-welcome">
           <h3>开始对话</h3>
-          <p>基于知识库中的文档内容提问，AI 会检索相关片段并生成答案。</p>
-          <p class="chat-welcome-sub">对话自动保存，刷新后可继续</p>
+          <p>基于知识库中的文档内容提问，答案带引用来源。</p>
+          <!-- 评审 P2-9：空态的价值在引导 —— 左对齐 + 可点击的示例问题，不做居中 hero -->
+          <div class="chat-welcome-examples">
+            <button
+              v-for="q in exampleQuestions"
+              :key="q"
+              type="button"
+              class="chat-reason-chip"
+              @click="input = q"
+            >
+              {{ q }}
+            </button>
+          </div>
         </div>
 
         <div
@@ -165,7 +182,7 @@
           v-model="input"
           type="textarea"
           :rows="2"
-          placeholder="输入问题..."
+          placeholder="输入问题…（Enter 发送，Shift+Enter 换行）"
           :disabled="sending"
           @keydown.enter="onEnter"
         />
@@ -196,7 +213,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Menu } from "@element-plus/icons-vue";
+import { ArrowLeft, Menu, Setting } from "@element-plus/icons-vue";
 import ChatConversations from "@/components/ChatConversations.vue";
 import {
   askStreamRequest,
@@ -240,6 +257,13 @@ const STAGE_TEXT: Record<string, string> = {
 const route = useRoute();
 const router = useRouter();
 const kbId = Number(route.params.kbId);
+
+/** 欢迎态示例问题（评审 P2-9）：点击即填入输入框，演示语料域内的问题 */
+const exampleQuestions = [
+  "供应商准入需要满足哪些条件？",
+  "出差住宿标准是多少？",
+  "皮具类产品的五金件有什么要求？",
+];
 
 const kbName = ref("加载中...");
 const input = ref("");
@@ -605,30 +629,40 @@ onUnmounted(() => {
   font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
 }
 
-.chat-hint {
-  font-size: 12px;
-  color: #c0c4cc;
+/* 评审 P0-4：参数按钮推到头部最右，检索参数收进 popover */
+.chat-params-btn {
   margin-left: auto;
 }
 
-/* K7 参数栏 */
-.chat-model {
-  width: 150px;
+.chat-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-sm);
 }
 
-.chat-param {
-  display: inline-flex;
+.chat-param-row {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: var(--app-gap-sm);
 }
 
 .chat-param-label {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--fs-hint);
+  color: var(--el-text-color-secondary);
+}
+
+.chat-param-muted {
+  font-size: var(--fs-hint);
+  color: var(--el-text-color-disabled);
 }
 
 .chat-topk {
   width: 96px;
+}
+
+.chat-model {
+  width: 150px;
 }
 
 /* K5 答案反馈 */
@@ -683,19 +717,20 @@ onUnmounted(() => {
 }
 
 .chat-welcome {
-  text-align: center;
-  margin-top: 80px;
+  margin-top: 24px;
   color: #909399;
 }
 
 .chat-welcome h3 {
-  font-size: 20px;
-  margin-bottom: 8px;
+  font-size: var(--fs-page);
+  margin-bottom: var(--app-gap-sm);
 }
 
-.chat-welcome-sub {
-  font-size: 12px;
-  color: #c0c4cc;
+.chat-welcome-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-gap-sm);
+  margin-top: 12px;
 }
 
 .chat-msg {
@@ -724,8 +759,10 @@ onUnmounted(() => {
   margin-left: 4px;
 }
 
+/* 用户气泡：品牌绿实底 + 白字（DESIGN.md §七规范，评审 P2-11 与代码不一致处） */
 .chat-msg--user .chat-msg-content {
-  background: var(--el-color-primary-light-9);
+  background: var(--el-color-primary);
+  color: #fff;
   border-radius: 8px 8px 2px 8px;
 }
 
@@ -839,7 +876,7 @@ onUnmounted(() => {
 
 .chat-input-area {
   display: flex;
-  gap: 12px;
+  gap: var(--app-gap-sm);
   align-items: flex-end;
   padding-top: 12px;
   border-top: 1px solid #e4e7ed;
