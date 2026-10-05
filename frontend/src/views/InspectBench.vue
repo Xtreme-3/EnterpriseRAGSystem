@@ -26,20 +26,31 @@
             <el-radio-button value="hybrid">混合（向量+关键词）</el-radio-button>
             <el-radio-button value="vector">纯向量</el-radio-button>
           </el-radio-group>
-          <span class="control-label">重排</span>
-          <el-switch v-model="rerank" size="small" />
-          <span class="control-label">top_k</span>
-          <el-slider
-            v-model="topK"
-            :min="1"
-            :max="20"
-            :step="1"
-            show-input
-            size="small"
-            style="width: 180px"
-          />
           <el-button type="primary" @click="runInspect" :loading="loading">检索</el-button>
         </div>
+
+        <!-- 高级参数（评审 P0-3）：低频参数折叠，顶部只留 Query / 模式 / 检索 -->
+        <el-collapse class="adv-params">
+          <el-collapse-item name="adv">
+            <template #title>
+              <span class="control-label">高级参数</span>
+            </template>
+            <div class="adv-row">
+              <span class="control-label">检索条数</span>
+              <el-input-number
+                v-model="topK"
+                :min="1"
+                :max="20"
+                :step="1"
+                controls-position="right"
+              />
+            </div>
+            <div class="adv-row">
+              <span class="control-label">重排</span>
+              <el-switch v-model="rerank" size="small" />
+            </div>
+          </el-collapse-item>
+        </el-collapse>
       </div>
     </div>
 
@@ -68,32 +79,30 @@
         </div>
         <div class="hit-body">
           <div class="hit-meta">
-            <el-tag size="small" type="info">{{ hit.filename }}</el-tag>
+            <span class="hit-filename">{{ hit.filename }}</span>
             <span class="meta-sep">chunk #{{ hit.chunk_index }}</span>
           </div>
-          <!-- 未重排：单一相似度条 -->
+          <!-- 评审 P1-8：分数用带色阶的数值 tag（≥90 绿 / 70-90 主色 / <70 橙），
+               进度条没有增量信息；省下的空间全部给切片正文 -->
           <div v-if="!usedRerank" class="score-row">
             <span class="score-label">相似度</span>
-            <div class="score-bar-track">
-              <div class="score-bar-fill" :style="{ width: scorePct(hit.score) + '%' }"></div>
-            </div>
-            <span class="score-value">{{ scorePct(hit.score) }}%</span>
+            <el-tag size="small" :type="scoreTagType(hit.score)" effect="plain">
+              {{ scorePct(hit.score) }}%
+            </el-tag>
           </div>
           <!-- 重排：检索（重排前）vs 重排 前后对比 -->
           <template v-else>
             <div class="score-row">
               <span class="score-label">检索</span>
-              <div class="score-bar-track">
-                <div class="score-bar-fill pre" :style="{ width: scorePct(hit.pre_score) + '%' }"></div>
-              </div>
-              <span class="score-value">{{ scorePct(hit.pre_score) }}%</span>
+              <el-tag size="small" :type="scoreTagType(hit.pre_score)" effect="plain">
+                {{ scorePct(hit.pre_score) }}%
+              </el-tag>
             </div>
             <div class="score-row">
               <span class="score-label">重排</span>
-              <div class="score-bar-track">
-                <div class="score-bar-fill" :style="{ width: scorePct(hit.score) + '%' }"></div>
-              </div>
-              <span class="score-value">{{ scorePct(hit.score) }}%</span>
+              <el-tag size="small" :type="scoreTagType(hit.score)" effect="plain">
+                {{ scorePct(hit.score) }}%
+              </el-tag>
             </div>
           </template>
           <div class="hit-content" :class="{ expanded: expanded.has(idx) }">
@@ -104,9 +113,10 @@
             link
             type="primary"
             size="small"
+            class="hit-expand"
             @click="toggleExpand(idx)"
           >
-            {{ expanded.has(idx) ? '收起' : '展开全部' }}
+            {{ expanded.has(idx) ? "收起" : `展开全部 · 共 ${hit.content.length} 字` }}
           </el-button>
         </div>
       </div>
@@ -150,6 +160,14 @@ onMounted(async () => {
 function scorePct(score: number): string {
   const clamped = Math.max(0, Math.min(score, 1));
   return (clamped * 100).toFixed(1);
+}
+
+/** 评审 P1-8：分数 tag 的色阶 —— ≥90% 绿 / 70–90% 主色 / <70% 橙。 */
+function scoreTagType(score: number): "success" | "warning" | "primary" {
+  const pct = Math.max(0, Math.min(score, 1)) * 100;
+  if (pct >= 90) return "success";
+  if (pct < 70) return "warning";
+  return "primary";
 }
 
 function toggleExpand(idx: number) {
@@ -201,7 +219,7 @@ async function runInspect() {
 .prepend-label {
   font-weight: 600;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .query-controls {
@@ -210,22 +228,33 @@ async function runInspect() {
   gap: 16px;
 }
 
+.adv-params {
+  --el-collapse-border-color: var(--el-border-color-lighter);
+}
+
+.adv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  padding: 4px 0;
+}
+
 .control-label {
   font-size: 13px;
   font-weight: 600;
-  color: #606266;
+  color: var(--el-text-color-regular);
   flex-shrink: 0;
 }
 
 .hint {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
 }
 
 /* -- 命中列表 -- */
 .hits-summary {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-bottom: 12px;
 }
 
@@ -239,14 +268,15 @@ async function runInspect() {
   display: flex;
   gap: 12px;
   background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: var(--radius-card);
   padding: 16px;
-  transition: box-shadow 0.15s;
+  transition: border-color 0.15s ease;
 }
 
+/* 评审 P1-8：零阴影 —— hover 只变边框色 */
 .hit-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .hit-rank {
@@ -278,14 +308,19 @@ async function runInspect() {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
+}
+
+.hit-filename {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
 }
 
 .meta-sep {
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 
-/* -- 相似度分数条 -- */
+/* -- 相似度分数：带色阶的数值 tag（评审 P1-8，进度条已移除） -- */
 .score-row {
   display: flex;
   align-items: center;
@@ -294,52 +329,28 @@ async function runInspect() {
 
 .score-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   flex-shrink: 0;
 }
 
-.score-bar-track {
-  flex: 1;
-  height: 6px;
-  background: #f0f0f0;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.score-bar-fill {
-  height: 100%;
-  background: var(--el-color-primary);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-}
-
-/* 重排前检索分：灰色条（前后对比用） */
-.score-bar-fill.pre {
-  background: #c0c4cc;
-}
-
-.score-value {
-  font-size: 12px;
-  font-weight: 600;
-  color: #303133;
-  min-width: 48px;
-  text-align: right;
-}
-
-/* -- 切片内容 -- */
+/* -- 切片内容：主体（评审 P1-8：内容才是质检台的判断对象） -- */
 .hit-content {
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
-  color: #404040;
+  color: var(--el-text-color-regular);
   white-space: pre-wrap;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 8;
   -webkit-box-orient: vertical;
 }
 
 .hit-content.expanded {
   display: block;
   -webkit-line-clamp: unset;
+}
+
+.hit-expand {
+  align-self: flex-end;
 }
 </style>
