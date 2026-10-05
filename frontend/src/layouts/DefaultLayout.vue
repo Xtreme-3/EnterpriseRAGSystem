@@ -6,8 +6,9 @@
       </div>
       <div class="header-right">
         <span class="header-user">{{ authStore.username }}</span>
-        <!-- I2 RBAC：全局角色徽章（admin） -->
-        <el-tag v-if="authStore.isAdmin" type="danger" size="small" effect="dark">管理员</el-tag>
+        <!-- I2 RBAC：全局角色徽章（admin）—— 评审 P1-7：权限不是危险状态，
+             不用红色实心块（语义色误用 + 高饱和色块违反「彩色面积 <10%」） -->
+        <el-tag v-if="authStore.isAdmin" type="primary" size="small" effect="plain">管理员</el-tag>
         <el-button text @click="handleLogout">退出</el-button>
       </div>
     </header>

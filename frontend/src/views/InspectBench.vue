@@ -287,7 +287,7 @@ async function runInspect() {
 }
 
 .rank-num {
-  font-size: 13px;
+  font-size: var(--fs-hint);
   font-weight: 700;
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
