@@ -18,6 +18,16 @@
 
   --app-bg: #f5f7fa;
 
+  /* ---- 布局刻度（design-manifest.md §二）：16px 唯一间距单位，紧凑处 8px ---- */
+  --app-gap: 16px;
+  --app-gap-sm: 8px;
+
+  /* ---- 字号四级（DESIGN.md §三）：只准用这四级 ---- */
+  --fs-page: 20px; /* 页面标题 */
+  --fs-card: 15px; /* 卡片/区块标题 */
+  --fs-body: 14px; /* 正文 */
+  --fs-hint: 12px; /* 辅助/提示 */
+
   /* ---- 圆角分层 ---- */
   --radius-container: 12px;
   --radius-card: 8px;

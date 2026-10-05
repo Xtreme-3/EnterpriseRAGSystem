@@ -402,7 +402,7 @@ onMounted(fetchKbs);
 }
 
 .kbs-toolbar h2 {
-  font-size: 22px;
+  font-size: var(--fs-page);
   font-weight: 600;
 }
 

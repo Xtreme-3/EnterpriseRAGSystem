@@ -702,7 +702,7 @@ onUnmounted(() => {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 0;
+  padding: var(--app-gap) 0;
 }
 
 .chat-welcome {
@@ -722,7 +722,18 @@ onUnmounted(() => {
 }
 
 .chat-msg {
-  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--app-gap);
+}
+
+/* flex column + align-items 分左右（design-manifest P0-a：float 是老写法，结构一复杂就塌） */
+.chat-msg--user {
+  align-items: flex-end;
+}
+
+.chat-msg--assistant {
+  align-items: flex-start;
 }
 
 .chat-msg-role {
@@ -741,29 +752,17 @@ onUnmounted(() => {
   border-radius: 8px 8px 2px 8px;
 }
 
+/* AI 气泡：白底 + 1px 浅边框。原先 #f5f7fa 与页面背景完全同色，边界不可见
+   （design-manifest P0-a 列为真 bug，DESIGN.md §二已知陷阱同款） */
 .chat-msg--assistant .chat-msg-content {
-  background: #f5f7fa;
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px 8px 8px 2px;
 }
 
 .chat-msg-content {
   padding: 12px 16px;
-  max-width: 85%;
-  display: inline-block;
-}
-
-.chat-msg--user .chat-msg-content {
-  float: right;
-}
-
-.chat-msg--assistant .chat-msg-content {
-  float: left;
-}
-
-.chat-msg::after {
-  content: "";
-  display: table;
-  clear: both;
+  max-width: 78%;
 }
 
 .chat-msg-text {
@@ -862,6 +861,7 @@ onUnmounted(() => {
 }
 
 .chat-input-area .el-button {
-  height: 60px;
+  /* 随输入框高度自适应（design-manifest P0-a：原硬编码 60px 靠运气对齐） */
+  align-self: stretch;
 }
 </style>
