@@ -123,7 +123,9 @@
                   :class="{ 'chat-source-chip--active': expandedSource === `${idx}-${si}` }"
                   @click="toggleSource(idx, si)"
                 >
-                  {{ src.filename }} · {{ (src.score * 100).toFixed(0) }}%
+                  <!-- 评审 P2-11：文件名用 ink、相似度用 muted，两级文字 -->
+                  <span class="chat-source-chip-name">{{ src.filename }}</span>
+                  <span class="chat-source-chip-score"> · {{ (src.score * 100).toFixed(0) }}%</span>
                 </button>
               </div>
               <div
@@ -834,12 +836,19 @@ onUnmounted(() => {
 .chat-source-chip {
   background: var(--app-surface);
   border: 1px solid var(--app-hairline);
-  border-radius: 4px;
+  border-radius: var(--radius-button);
   padding: 2px 8px;
-  font-size: 12px;
-  color: var(--app-ink);
+  font-size: var(--fs-hint);
   cursor: pointer;
   transition: border-color 0.15s ease;
+}
+
+.chat-source-chip-name {
+  color: var(--app-ink);
+}
+
+.chat-source-chip-score {
+  color: var(--app-ink-muted);
 }
 
 .chat-source-chip:hover {
@@ -849,6 +858,10 @@ onUnmounted(() => {
 .chat-source-chip--active {
   background: var(--el-color-primary-light-9);
   border-color: var(--el-color-primary-light-5);
+}
+
+.chat-source-chip--active .chat-source-chip-name,
+.chat-source-chip--active .chat-source-chip-score {
   color: var(--el-color-primary);
 }
 
