@@ -17,7 +17,7 @@
           <div class="kb-title-row">
             <h3 class="kb-name">{{ kb.name }}</h3>
             <!-- I2 RBAC：角色徽章 -->
-            <el-tag size="small" :type="roleTagType(kb.role)" effect="plain">{{ roleLabel(kb.role) }}</el-tag>
+            <el-tag size="small" :type="roleTagType(kb.role)" :effect="roleTagEffect(kb.role)">{{ roleLabel(kb.role) }}</el-tag>
           </div>
           <p class="kb-desc">{{ kb.description || '暂无描述' }}</p>
           <div class="kb-meta">
@@ -26,23 +26,35 @@
           </div>
         </div>
         <div class="kb-card-actions">
-          <!-- design-manifest P0-b：一个主操作（进入对话）+ 其余灰色文字按钮 —— 彩色只表达状态 -->
+          <!-- design-manifest P0-b + 评审 P0-2：主操作「进入对话」+ 次操作「文档」，
+               低频入口收进「更多」下拉 —— 卡片不再挤 8 个按钮 -->
           <el-button type="primary" @click="goChat(kb.id)">进入对话</el-button>
-          <div class="kb-action-group">
-            <el-button text @click="goDocs(kb.id)">文档</el-button>
-            <el-button text @click="goInspect(kb.id)">质检</el-button>
-            <el-button text @click="goDiagnostics(kb.id)">体检</el-button>
-            <el-button text @click="goDocHealth(kb.id)">健康</el-button>
-            <el-button text @click="goQaLogs(kb.id)">历史</el-button>
-            <!-- I2 RBAC：仅 owner 可管理成员 -->
-            <el-button v-if="kb.role === 'owner'" text @click="openMembers(kb)">成员</el-button>
-          </div>
-          <!-- I2 RBAC：仅 owner 可删除知识库 -->
-          <el-popconfirm v-if="kb.role === 'owner'" title="删除后不可恢复，确定删除？" @confirm="handleDelete(kb.id)">
-            <template #reference>
-              <el-button text type="danger">删除</el-button>
+          <el-button text @click="goDocs(kb.id)">文档</el-button>
+          <el-dropdown trigger="click" @command="(cmd: string) => handleKbCommand(cmd, kb)">
+            <el-button text>
+              更多
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="inspect">检索测试</el-dropdown-item>
+                <el-dropdown-item command="diagnostics">索引体检</el-dropdown-item>
+                <el-dropdown-item command="docHealth">文档状态</el-dropdown-item>
+                <el-dropdown-item command="qaLogs">问答历史</el-dropdown-item>
+                <el-dropdown-item v-if="kb.role === 'owner'" command="members" divided>
+                  成员管理
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-if="kb.role === 'owner'"
+                  command="delete"
+                  divided
+                  class="kb-danger-item"
+                >
+                  删除知识库
+                </el-dropdown-item>
+              </el-dropdown-menu>
             </template>
-          </el-popconfirm>
+          </el-dropdown>
         </div>
       </div>
     </div>
@@ -126,7 +138,7 @@
         <el-table-column prop="username" label="用户名" min-width="140" />
         <el-table-column label="角色" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="roleTagType(row.role)" effect="plain">{{ roleLabel(row.role) }}</el-tag>
+            <el-tag size="small" :type="roleTagType(row.role)" :effect="roleTagEffect(row.role)">{{ roleLabel(row.role) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="加入时间" width="160">
@@ -157,19 +169,20 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage, type FormInstance, type FormRules, type UploadFile, type UploadInstance } from "element-plus";
-import { Loading, UploadFilled } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadFile, type UploadInstance } from "element-plus";
+import { ArrowDown, Loading, UploadFilled } from "@element-plus/icons-vue";
 import { kbApi, type KBItem, type KBMember } from "@/api/kbs";
 import { docApi } from "@/api/docs";
 import { extractErrorMessage } from "@/api/error";
 
 const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
 
-// I2 RBAC：角色徽章文案与样式
+// I2 RBAC：角色徽章文案与样式（评审 P1-7：权限角色不是「告警/成功」状态，
+// 不用 warning/success —— owner 品牌色描边，editor/viewer 中性 info）
 const ROLE_LABEL: Record<string, string> = { owner: "所有者", editor: "编辑者", viewer: "只读" };
-const ROLE_TAG: Record<string, "warning" | "success" | "info"> = {
-  owner: "warning",
-  editor: "success",
+const ROLE_TAG: Record<string, "primary" | "info"> = {
+  owner: "primary",
+  editor: "info",
   viewer: "info",
 };
 
@@ -177,8 +190,36 @@ function roleLabel(role: string): string {
   return ROLE_LABEL[role] || role;
 }
 
-function roleTagType(role: string): "warning" | "success" | "info" {
+function roleTagType(role: string): "primary" | "info" {
   return ROLE_TAG[role] || "info";
+}
+
+function roleTagEffect(role: string): "plain" | "light" {
+  return role === "editor" ? "light" : "plain";
+}
+
+/** 卡片「更多」下拉（评审 P0-2）：低频入口统一入口形态，路由参数不变 */
+function handleKbCommand(cmd: string, kb: KBItem) {
+  if (cmd === "inspect") {
+    goInspect(kb.id);
+  } else if (cmd === "diagnostics") {
+    goDiagnostics(kb.id);
+  } else if (cmd === "docHealth") {
+    goDocHealth(kb.id);
+  } else if (cmd === "qaLogs") {
+    goQaLogs(kb.id);
+  } else if (cmd === "members") {
+    openMembers(kb);
+  } else if (cmd === "delete") {
+    // 下拉项装不下 el-popconfirm，二次确认用等价的 MessageBox，不直接删
+    ElMessageBox.confirm("删除后不可恢复，确定删除？", `删除知识库 · ${kb.name}`, {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    })
+      .then(() => handleDelete(kb.id))
+      .catch(() => undefined);
+  }
 }
 
 const router = useRouter();
@@ -471,7 +512,7 @@ onMounted(fetchKbs);
 }
 
 .kb-desc {
-  font-size: 13px;
+  font-size: var(--fs-hint);
   color: #909399;
   min-height: 36px;
   display: -webkit-box;
@@ -490,17 +531,15 @@ onMounted(fetchKbs);
 
 .kb-card-actions {
   padding: 8px 16px;
-  border-top: 1px solid #f2f2f2;
+  border-top: 1px solid var(--el-border-color-lighter);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: var(--app-gap-sm);
 }
 
-.kb-action-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0;
+.kb-danger-item {
+  color: var(--el-color-danger);
 }
 
 .kbs-loading {
