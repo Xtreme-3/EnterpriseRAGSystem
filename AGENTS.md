@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（392 用例）；前端 vitest + jsdom + @vue/test-utils（51 用例）
+- **测试**：后端 pytest + httpx + TestClient（414 用例）；前端 vitest + jsdom + @vue/test-utils（55 用例）
 
 ## 目录结构
 
@@ -254,7 +254,7 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - pgvector 相关用例单独标记，连不上自动跳过
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
-- **前端**：`cd frontend && npm test`（vitest + jsdom，51 用例）。约定见上文「前端测试（K9）」
+- **前端**：`cd frontend && npm test`（vitest + jsdom，55 用例）。约定见上文「前端测试（K9）」
 - **junit 输出必须落到仓库内**（如 `.pytest-tmp/junit.xml`）：`/tmp` 在 Git Bash 与 Windows Python
   下不是同一个路径（实际落到 `D:\tmp`），写在 `/tmp` 会找不到文件
 - **看结果以 junit XML 的计数为准**：根节点是 `<testsuites>` 包装，`root.get('tests')` 返回 `None`，
@@ -317,7 +317,9 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 答案质量 K3 批 1（system 分离 + 来源元信息 + 生成参数配置化） | ✅ |
 | 答案质量 K3 批 2（引用校验 + 拒答分级 + 命中阈值 0.1→0.40） | ✅ |
 | 可观测性与错误提示 K8（日志可配 + request-id + 静默点开口 + 前端错误归一化） | ✅ |
-| 前端测试框架 K9（vitest + jsdom + @vue/test-utils，51 用例） | ✅ |
-| K4 摄取异步化 | ⬜ |
+| 前端测试框架 K9（vitest + jsdom + @vue/test-utils，落地时 51 用例） | ✅ |
+| 对话页参数可视化 K7（top_k / rerank 三态 / 模型切换 + `GET /api/config/chat`） | ✅ |
+| 答案反馈闭环 K5（有用/没用 + 原因标签 + `message_feedback` 表 + done 事件带 message_id） | ✅ |
+| K4 摄取异步化（暂缓，触发条件见 docs/roadmap.md 排期决策） | ⬜ |
 
-**后端 392 测试全绿**（279 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 51 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（反馈日志、数据看板、异步摄取队列、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 414 测试全绿**（301 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 55 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（数据看板、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成；问答缓存已移入后续候选）。
