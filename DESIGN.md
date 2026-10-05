@@ -475,20 +475,20 @@ hover 底色 `{colors.canvas}`；选中项底色 `{colors.brand-soft}` + 文字 
 
 ## 十、Known Gaps · 现状与规范的偏差
 
-按"改完肉眼可见"排序，这些是**已识别但尚未落地**的项
-（详细逐页方案见 `docs/design-manifest.md`）：
+> **2026-10-05：以下 9 项已全部清零**（三批提交，见 `docs/progress-log.md`）。
+> 表格保留作为历史记录与对照基线 —— 新页面仍应对照本节理解"什么是偏差"。
 
 | # | 项 | 状态 |
 |---|---|---|
-| 1 | `style.css` 尚未定义 `--app-gap` / `--fs-*` 刻度变量，间距与字号仍是散落的字面量 | ⬜ 未做 |
-| 2 | Chat AI 气泡背景 = 页面背景（`#f5f7fa`），气泡边界不可见 | ⬜ 未做（真 bug） |
-| 3 | Chat 气泡仍用 `float` + `::after clear`，未改 flex | ⬜ 未做 |
-| 4 | 引用来源仍是 `el-collapse` 折叠面板，未改成引用芯片 | ⬜ 未做 |
-| 5 | Chat 输入区按钮 `height: 60px` 硬编码 | ⬜ 未做 |
-| 6 | KbsList 每卡 5 个多色按钮，违反"彩色只表达状态" | ⬜ 未做 |
-| 7 | Diagnostics / DocHealth 各写一份 `.stat-card`，未抽公共组件 | ⬜ 未做 |
-| 8 | 页面标题仍混用 22px 与 20px | ⬜ 未做 |
-| 9 | 全站无响应式断点，窄屏（<1280px）下 240px 会话侧边栏会挤压对话区 | ⬜ 未做 |
+| 1 | `style.css` 尚未定义 `--app-gap` / `--fs-*` 刻度变量，间距与字号仍是散落的字面量 | ✅ 已定义（新代码用 token，旧代码分步收敛） |
+| 2 | Chat AI 气泡背景 = 页面背景（`#f5f7fa`），气泡边界不可见 | ✅ 改白底 + 1px 浅边框 |
+| 3 | Chat 气泡仍用 `float` + `::after clear`，未改 flex | ✅ flex column + align-items |
+| 4 | 引用来源仍是 `el-collapse` 折叠面板，未改成引用芯片 | ✅ 芯片行 + 点击展开切片原文 |
+| 5 | Chat 输入区按钮 `height: 60px` 硬编码 | ✅ `align-self: stretch` |
+| 6 | KbsList 每卡 5 个多色按钮，违反"彩色只表达状态" | ✅ 「进入对话」唯一主色 + 其余灰文字按钮 |
+| 7 | Diagnostics / DocHealth 各写一份 `.stat-card`，未抽公共组件 | ✅ `components/StatCard.vue` 两页共用 |
+| 8 | 页面标题仍混用 22px 与 20px | ✅ 归一到 `var(--fs-page)` |
+| 9 | 全站无响应式断点，窄屏（<1280px）下 240px 会话侧边栏会挤压对话区 | ✅ 断点收进「会话」el-drawer |
 
 > ✅ 已做对、**不要推翻**的：卡片"白底 + 1px 边框 + 8px 圆角"、品牌墨绿色阶、
 > 圆角分层变量、标题衬线/正文无衬线的双字体系、靠底色分层零阴影。

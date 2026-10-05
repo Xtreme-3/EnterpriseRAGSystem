@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（432 用例）；前端 vitest + jsdom + @vue/test-utils（55 用例）
+- **测试**：后端 pytest + httpx + TestClient（432 用例）；前端 vitest + jsdom + @vue/test-utils（57 用例）
 
 ## 目录结构
 
@@ -221,7 +221,8 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - `DESIGN.md` 定义「界面长什么样」，本文件定义「怎么搭」——两者分工不同，都要遵守
 - 它是唯一的设计 token 来源：颜色 / 字号 / 圆角 / 间距 / 组件形态都在里面，**不要在页面里臆造新值**
 - 完整的设计理念与历史决策见 `docs/design-guide.md`（去 AI 味硬规则）与 `docs/design-manifest.md`（逐页改造清单）
-- DESIGN.md 里 **十、Known Gaps** 列出的 9 项是「已知但尚未落地」的偏差，不要按现状把它们当正确做法去复制
+- DESIGN.md 里 **十、Known Gaps** 列出的 9 项偏差已于 2026-10-05 全部清零（见该节表格与 progress-log）——
+  新页面不要再复制旧页面的历史写法，直接按 DESIGN.md 的 token 与组件形态来。
 
 ## 开发约定（积木式开发）
 
@@ -254,7 +255,7 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - pgvector 相关用例单独标记，连不上自动跳过
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
-- **前端**：`cd frontend && npm test`（vitest + jsdom，55 用例）。约定见上文「前端测试（K9）」
+- **前端**：`cd frontend && npm test`（vitest + jsdom，57 用例）。约定见上文「前端测试（K9）」
 - **junit 输出必须落到仓库内**（如 `.pytest-tmp/junit.xml`）：`/tmp` 在 Git Bash 与 Windows Python
   下不是同一个路径（实际落到 `D:\tmp`），写在 `/tmp` 会找不到文件
 - **看结果以 junit XML 的计数为准**：根节点是 `<testsuites>` 包装，`root.get('tests')` 返回 `None`，
@@ -323,4 +324,4 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 问答缓存 K6（精确 + 语义两级，阈值实测 0.78，kb 级失效，多轮不缓存） | ✅ |
 | K4 摄取异步化（暂缓，触发条件见 docs/roadmap.md 排期决策） | ⬜ |
 
-**后端 432 测试全绿**（319 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 55 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（数据看板、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 432 测试全绿**（319 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 57 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（数据看板、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
