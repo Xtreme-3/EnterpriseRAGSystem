@@ -1,33 +1,14 @@
 <template>
   <div class="chat-page">
-    <!-- J2 会话侧边栏 -->
+    <!-- J2 会话侧边栏：桌面常驻；窄屏（<1280px）隐藏，改用下方 el-drawer -->
     <aside class="chat-sidebar">
-      <div class="sidebar-header">
-        <span class="sidebar-title">会话</span>
-        <el-button size="small" type="primary" text @click="newChat">
-          <el-icon><Plus /></el-icon>
-          <span>新对话</span>
-        </el-button>
-      </div>
-      <div class="sidebar-list">
-        <div v-if="conversations.length === 0" class="sidebar-empty">
-          暂无会话<br />发送第一条消息自动创建
-        </div>
-        <div
-          v-for="conv in conversations"
-          :key="conv.id"
-          class="sidebar-item"
-          :class="{ 'sidebar-item--active': conv.id === activeConvId }"
-          @click="selectConversation(conv)"
-        >
-          <span class="sidebar-item-title" :title="conv.title">{{ conv.title }}</span>
-          <el-popconfirm title="删除该会话？" width="180" @confirm="removeConversation(conv)">
-            <template #reference>
-              <el-icon class="sidebar-item-del" @click.stop><Delete /></el-icon>
-            </template>
-          </el-popconfirm>
-        </div>
-      </div>
+      <ChatConversations
+        :conversations="conversations"
+        :active-conv-id="activeConvId"
+        @new="onNewConv"
+        @select="onSelectConv"
+        @remove="removeConversation"
+      />
     </aside>
 
     <!-- 主聊天区 -->
@@ -37,6 +18,10 @@
         <el-button class="back-btn" @click="goBack">
           <el-icon><ArrowLeft /></el-icon>
           <span>返回</span>
+        </el-button>
+        <el-button class="chat-conv-toggle" @click="drawerVisible = true">
+          <el-icon><Menu /></el-icon>
+          <span>会话</span>
         </el-button>
         <span class="chat-kb-name">{{ kbName }}</span>
         <el-radio-group v-model="mode" size="small" class="chat-mode">
@@ -194,13 +179,25 @@
         </el-button>
       </div>
     </div>
+
+    <!-- 窄屏（<1280px）会话抽屉：与桌面侧边栏共用同一份会话面板组件 -->
+    <el-drawer v-model="drawerVisible" direction="ltr" size="260px" :with-header="false">
+      <ChatConversations
+        :conversations="conversations"
+        :active-conv-id="activeConvId"
+        @new="onNewConv"
+        @select="onSelectConv"
+        @remove="removeConversation"
+      />
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Plus, Delete } from "@element-plus/icons-vue";
+import { ArrowLeft, Menu } from "@element-plus/icons-vue";
+import ChatConversations from "@/components/ChatConversations.vue";
 import {
   askStreamRequest,
   parseSseStream,
@@ -273,6 +270,19 @@ const msgContainer = ref<HTMLElement>();
 const conversations = ref<Conversation[]>([]);
 const activeConvId = ref<number | null>(null);
 const loadingConv = ref(false);
+// K9 响应式（Known Gap #9）：窄屏侧边栏收进抽屉
+const drawerVisible = ref(false);
+
+/** 抽屉里的操作顺手把抽屉关掉（桌面侧边栏路径下关的是未打开的抽屉，无副作用） */
+function onNewConv() {
+  newChat();
+  drawerVisible.value = false;
+}
+
+function onSelectConv(conv: Conversation) {
+  selectConversation(conv);
+  drawerVisible.value = false;
+}
 
 let abortController: AbortController | null = null;
 
@@ -541,82 +551,29 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
-/* ---- J2 会话侧边栏 ---- */
+/* ---- J2 会话侧边栏（内容在 components/ChatConversations.vue）：桌面常驻，窄屏收进抽屉 ---- */
 .chat-sidebar {
   width: 240px;
   flex-shrink: 0;
   border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
-  margin-right: 20px;
+  margin-right: var(--app-gap);
 }
 
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 12px;
-  border-bottom: 1px solid #e4e7ed;
-  flex-shrink: 0;
+/* Known Gap #9：<1280px 时 240px 侧边栏挤压对话区 → 收成「会话」抽屉 */
+.chat-conv-toggle {
+  display: none;
 }
 
-.sidebar-title {
-  font-size: 15px;
-  font-weight: 600;
-}
+@media (max-width: 1279px) {
+  .chat-sidebar {
+    display: none;
+  }
 
-.sidebar-list {
-  flex: 1;
-  overflow-y: auto;
-  padding-top: 8px;
-}
-
-.sidebar-empty {
-  color: #c0c4cc;
-  font-size: 12px;
-  text-align: center;
-  line-height: 1.8;
-  padding: 24px 0;
-}
-
-.sidebar-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  margin-bottom: 4px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: #606266;
-  font-size: 13px;
-  transition: background 0.2s;
-}
-
-.sidebar-item:hover {
-  background: #f5f7fa;
-}
-
-.sidebar-item--active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-}
-
-.sidebar-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.sidebar-item-del {
-  margin-left: 8px;
-  color: #c0c4cc;
-  flex-shrink: 0;
-}
-
-.sidebar-item-del:hover {
-  color: #f56c6c;
+  .chat-conv-toggle {
+    display: inline-flex;
+  }
 }
 
 /* ---- 主聊天区 ---- */
