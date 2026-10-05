@@ -579,7 +579,7 @@ onUnmounted(() => {
 .chat-sidebar {
   width: 240px;
   flex-shrink: 0;
-  border-right: 1px solid #e4e7ed;
+  border-right: 1px solid var(--app-hairline);
   display: flex;
   flex-direction: column;
   margin-right: var(--app-gap);
@@ -612,8 +612,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #e4e7ed;
+  padding-bottom: var(--app-gap);
+  border-bottom: 1px solid var(--app-hairline);
   flex-shrink: 0;
 }
 
@@ -673,7 +673,7 @@ onUnmounted(() => {
 }
 
 .chat-feedback-btn {
-  color: #909399;
+  color: var(--app-ink-muted);
   height: auto;
   padding: 2px 6px;
 }
@@ -689,19 +689,19 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
 }
 
 .chat-reason-chip {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--app-hairline);
   border-radius: 4px;
   padding: 2px 8px;
   cursor: pointer;
-  color: #606266;
+  color: var(--app-ink-secondary);
 }
 
 .chat-reason-chip:hover {
-  border-color: #87b7ab;
+  border-color: var(--app-brand-border);
 }
 
 .chat-reason-chip--active {
@@ -718,7 +718,7 @@ onUnmounted(() => {
 
 .chat-welcome {
   margin-top: 24px;
-  color: #909399;
+  color: var(--app-ink-muted);
 }
 
 .chat-welcome h3 {
@@ -750,7 +750,7 @@ onUnmounted(() => {
 
 .chat-msg-role {
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
   margin-bottom: 4px;
   padding: 0 4px;
 }
@@ -762,14 +762,14 @@ onUnmounted(() => {
 /* 用户气泡：品牌绿实底 + 白字（DESIGN.md §七规范，评审 P2-11 与代码不一致处） */
 .chat-msg--user .chat-msg-content {
   background: var(--el-color-primary);
-  color: #fff;
+  color: var(--app-surface);
   border-radius: 8px 8px 2px 8px;
 }
 
-/* AI 气泡：白底 + 1px 浅边框。原先 #f5f7fa 与页面背景完全同色，边界不可见
+/* AI 气泡：白底 + 1px 浅边框。原先 var(--app-canvas) 与页面背景完全同色，边界不可见
    （design-manifest P0-a 列为真 bug，DESIGN.md §二已知陷阱同款） */
 .chat-msg--assistant .chat-msg-content {
-  background: #fff;
+  background: var(--app-surface);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px 8px 8px 2px;
 }
@@ -797,7 +797,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #909399;
+  color: var(--app-ink-muted);
 }
 
 .chat-msg-stage::before {
@@ -812,8 +812,8 @@ onUnmounted(() => {
 /* K1：流内 error 事件 / 请求异常的失败提示 */
 .chat-msg-failed {
   margin-top: 8px;
-  font-size: 13px;
-  color: #f56c6c;
+  font-size: var(--fs-body);
+  color: var(--el-color-danger);
 }
 
 @keyframes blink {
@@ -832,18 +832,18 @@ onUnmounted(() => {
 }
 
 .chat-source-chip {
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--app-surface);
+  border: 1px solid var(--app-hairline);
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 12px;
-  color: #303133;
+  color: var(--app-ink);
   cursor: pointer;
   transition: border-color 0.15s ease;
 }
 
 .chat-source-chip:hover {
-  border-color: #87b7ab;
+  border-color: var(--app-brand-border);
 }
 
 .chat-source-chip--active {
@@ -855,13 +855,13 @@ onUnmounted(() => {
 .chat-source-detail {
   margin-top: var(--app-gap-sm);
   padding: 8px 10px;
-  background: #fafafa;
+  background: var(--app-surface-sunken);
   border-radius: 6px;
 }
 
 .chat-source-content {
-  font-size: 13px;
-  color: #606266;
+  font-size: var(--fs-body);
+  color: var(--app-ink-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -869,8 +869,8 @@ onUnmounted(() => {
 
 .chat-error {
   text-align: center;
-  color: #f56c6c;
-  font-size: 13px;
+  color: var(--el-color-danger);
+  font-size: var(--fs-body);
   padding: 8px;
 }
 
@@ -879,7 +879,7 @@ onUnmounted(() => {
   gap: var(--app-gap-sm);
   align-items: flex-end;
   padding-top: 12px;
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid var(--app-hairline);
   flex-shrink: 0;
 }
 

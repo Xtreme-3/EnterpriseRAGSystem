@@ -281,7 +281,7 @@ onMounted(init);
 }
 
 .breadcrumb-sep {
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
 }
 
 .breadcrumb-current {

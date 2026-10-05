@@ -93,19 +93,19 @@ onMounted(async () => {
 
 .answer-detail {
   padding: 8px 16px;
-  background: #fafafa;
+  background: var(--app-surface-sunken);
 }
 
 .answer-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
   margin-bottom: 6px;
 }
 
 .answer-text {
   margin: 0;
   font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
-  font-size: 13px;
+  font-size: var(--fs-table);
   line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;

@@ -225,7 +225,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .diag-toolbar {
@@ -236,7 +236,7 @@ onMounted(async () => {
 
 .diag-status-text {
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
 }
 
 /* -- 状态条（评审 P0-1）：正常/警告结论压成一行，el-result 只留给空态与错误态 -- */
@@ -283,7 +283,7 @@ onMounted(async () => {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 12px;
+  gap: var(--app-gap-sm);
   margin-bottom: 24px;
 }
 
@@ -295,15 +295,15 @@ onMounted(async () => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-ink);
   margin-bottom: 12px;
 }
 
 .fail-group {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 12px 16px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-hairline);
+  border-radius: var(--radius-card);
+  padding: 16px;
   margin-bottom: 12px;
 }
 
@@ -311,11 +311,11 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--app-gap-sm);
 }
 
 .fail-error {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--el-color-danger);
   word-break: break-all;

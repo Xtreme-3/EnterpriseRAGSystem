@@ -26,8 +26,8 @@ withDefaults(
 
 <style scoped>
 .stat-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--app-surface);
+  border: 1px solid var(--app-hairline);
   border-radius: var(--radius-card);
   padding: 16px;
   text-align: center;
@@ -36,13 +36,13 @@ withDefaults(
 .stat-num {
   font-size: 26px;
   font-weight: 700;
-  color: #303133;
+  color: var(--app-ink);
   line-height: 1.2;
 }
 
 .stat-label {
   font-size: var(--fs-hint);
-  color: #909399;
+  color: var(--app-ink-muted);
   margin-top: 4px;
 }
 

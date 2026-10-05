@@ -213,12 +213,12 @@ async function runInspect() {
 .query-area {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--app-gap);
 }
 
 .prepend-label {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-hint);
   color: var(--el-text-color-regular);
 }
 
@@ -240,7 +240,7 @@ async function runInspect() {
 }
 
 .control-label {
-  font-size: 13px;
+  font-size: var(--fs-hint);
   font-weight: 600;
   color: var(--el-text-color-regular);
   flex-shrink: 0;
@@ -248,26 +248,26 @@ async function runInspect() {
 
 .hint {
   color: var(--el-text-color-secondary);
-  font-size: 13px;
+  font-size: var(--fs-hint);
 }
 
 /* -- 命中列表 -- */
 .hits-summary {
-  font-size: 13px;
+  font-size: var(--fs-hint);
   color: var(--el-text-color-secondary);
-  margin-bottom: 12px;
+  margin-bottom: var(--app-gap-sm);
 }
 
 .hits-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--app-gap);
 }
 
 .hit-card {
   display: flex;
-  gap: 12px;
-  background: #fff;
+  gap: var(--app-gap);
+  background: var(--app-surface);
   border: 1px solid var(--el-border-color-light);
   border-radius: var(--radius-card);
   padding: 16px;
@@ -307,7 +307,7 @@ async function runInspect() {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-hint);
   color: var(--el-text-color-regular);
 }
 

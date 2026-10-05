@@ -203,7 +203,7 @@ onMounted(async () => {
 
 .dh-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
   max-width: 360px;
   text-align: right;
 }
@@ -212,7 +212,7 @@ onMounted(async () => {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 12px;
+  gap: var(--app-gap-sm);
   margin-bottom: 24px;
 }
 
@@ -231,7 +231,7 @@ onMounted(async () => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-ink);
   margin-bottom: 8px;
   display: flex;
   align-items: center;
@@ -240,18 +240,18 @@ onMounted(async () => {
 
 .section-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--app-ink-muted);
   margin: 0 0 12px;
 }
 
 .suggest-warn {
   color: var(--el-color-warning);
-  font-size: 13px;
+  font-size: var(--fs-hint);
 }
 
 .suggest-mute {
-  color: #909399;
-  font-size: 13px;
+  color: var(--app-ink-muted);
+  font-size: var(--fs-hint);
 }
 
 .heat-bar-wrap {
@@ -271,7 +271,7 @@ onMounted(async () => {
 
 .heat-num {
   font-size: 12px;
-  color: #606266;
+  color: var(--app-ink-secondary);
   white-space: nowrap;
 }
 </style>

@@ -56,7 +56,7 @@ defineEmits<{
   align-items: center;
   justify-content: space-between;
   padding: 4px 4px 12px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--app-hairline);
   flex-shrink: 0;
 }
 
@@ -72,7 +72,7 @@ defineEmits<{
 }
 
 .conv-empty {
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
   font-size: var(--fs-hint);
   text-align: center;
   line-height: 1.8;
@@ -87,13 +87,13 @@ defineEmits<{
   margin-bottom: 4px;
   border-radius: 6px;
   cursor: pointer;
-  color: #606266;
+  color: var(--app-ink-secondary);
   font-size: 13px;
   transition: background 0.15s ease;
 }
 
 .conv-item:hover {
-  background: #f5f7fa;
+  background: var(--app-canvas);
 }
 
 .conv-item--active {
@@ -111,11 +111,11 @@ defineEmits<{
 
 .conv-item-del {
   margin-left: var(--app-gap-sm);
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
   flex-shrink: 0;
 }
 
 .conv-item-del:hover {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 </style>

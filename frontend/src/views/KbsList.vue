@@ -83,7 +83,7 @@
 
         <!-- 可选：直接上传文档 -->
         <el-divider content-position="left">
-          <span style="font-size:13px;color:#909399">添加文档（可选，支持批量）</span>
+          <span style="font-size:var(--fs-hint);color:var(--app-ink-muted)">添加文档（可选，支持批量）</span>
         </el-divider>
 
         <el-upload
@@ -459,8 +459,8 @@ onMounted(fetchKbs);
 }
 
 .kb-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--app-surface);
+  border: 1px solid var(--app-hairline);
   border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
@@ -472,14 +472,14 @@ onMounted(fetchKbs);
 }
 
 .kb-card-body {
-  padding: 20px 20px 12px;
+  padding: 16px;
   flex: 1;
 }
 
 .kb-name {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-ink);
   font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
   margin-bottom: 8px;
   overflow: hidden;
@@ -508,12 +508,12 @@ onMounted(fetchKbs);
 
 .member-owner-hint {
   font-size: 12px;
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
 }
 
 .kb-desc {
   font-size: var(--fs-hint);
-  color: #909399;
+  color: var(--app-ink-muted);
   min-height: 36px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -525,7 +525,7 @@ onMounted(fetchKbs);
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
   margin-top: 8px;
 }
 

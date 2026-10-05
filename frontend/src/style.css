@@ -27,10 +27,29 @@
   --fs-card: 15px; /* 卡片/区块标题 */
   --fs-body: 14px; /* 正文 */
   --fs-hint: 12px; /* 辅助/提示 */
+  --fs-table: 13px; /* 仅限表格单元格（DESIGN.md §三例外条款） */
+
+  /* ---- 表面 / 线 / 文字（DESIGN.md §二）：全站字面色值统一引用 token，不再写死 ---- */
+  --app-canvas: #f5f7fa;          /* 页面底色（= --app-bg） */
+  --app-surface: #ffffff;         /* 卡片、气泡、顶栏 */
+  --app-surface-sunken: #fafafa;  /* 表头、切片原文等凹陷面 */
+  --app-hairline: #e4e7ed;        /* 卡片边框、分隔线 */
+  --app-hairline-strong: #dcdfe6; /* 表单控件边框 */
+  --app-hairline-soft: #ebeef5;   /* 更浅的线 */
+  --app-ink: #303133;             /* 标题与正文 */
+  --app-ink-secondary: #606266;   /* 次级正文 */
+  --app-ink-muted: #909399;       /* 说明、表头、标签 */
+  --app-ink-disabled: #c0c4cc;    /* 占位、禁用、空态 */
+  --app-brand: #0f6e56;
+  --app-brand-hover: #0c5845;
+  --app-brand-soft: #e7f1ee;
+  --app-brand-border: #87b7ab;
+  --app-brand-line: #b7d4cc;
 
   /* ---- 圆角分层 ---- */
   --radius-container: 12px;
   --radius-card: 8px;
+  --radius-item: 6px;  /* 列表条目 */
   --radius-button: 4px;
 }
 
