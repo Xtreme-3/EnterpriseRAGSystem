@@ -26,15 +26,16 @@
           </div>
         </div>
         <div class="kb-card-actions">
+          <!-- design-manifest P0-b：一个主操作（进入对话）+ 其余灰色文字按钮 —— 彩色只表达状态 -->
+          <el-button type="primary" @click="goChat(kb.id)">进入对话</el-button>
           <div class="kb-action-group">
-            <el-button text type="primary" @click="goDocs(kb.id)">文档</el-button>
-            <el-button text type="success" @click="goChat(kb.id)">对话</el-button>
-            <el-button text type="warning" @click="goInspect(kb.id)">质检</el-button>
+            <el-button text @click="goDocs(kb.id)">文档</el-button>
+            <el-button text @click="goInspect(kb.id)">质检</el-button>
             <el-button text @click="goDiagnostics(kb.id)">体检</el-button>
-            <el-button text type="success" @click="goDocHealth(kb.id)">健康</el-button>
-            <el-button text type="info" @click="goQaLogs(kb.id)">历史</el-button>
+            <el-button text @click="goDocHealth(kb.id)">健康</el-button>
+            <el-button text @click="goQaLogs(kb.id)">历史</el-button>
             <!-- I2 RBAC：仅 owner 可管理成员 -->
-            <el-button v-if="kb.role === 'owner'" text type="warning" @click="openMembers(kb)">成员</el-button>
+            <el-button v-if="kb.role === 'owner'" text @click="openMembers(kb)">成员</el-button>
           </div>
           <!-- I2 RBAC：仅 owner 可删除知识库 -->
           <el-popconfirm v-if="kb.role === 'owner'" title="删除后不可恢复，确定删除？" @confirm="handleDelete(kb.id)">

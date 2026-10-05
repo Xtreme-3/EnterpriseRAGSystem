@@ -108,19 +108,30 @@
             <!-- 流式光标 -->
             <span v-if="msg.streaming && msg.content" class="chat-cursor">|</span>
 
-            <!-- 来源引用：K1 起 sources 事件先于答案到达，立即渲染，不必等流结束 -->
+            <!-- 来源引用：K1 起 sources 事件先于答案到达，立即渲染，不必等流结束。
+                 引用芯片（design-manifest P0-a）：溯源是产品最大卖点，不藏进折叠面板 ——
+                 一排「文件名 · 相似度%」芯片，点击展开对应切片原文 -->
             <div v-if="msg.sources.length > 0" class="chat-sources">
-              <el-collapse>
-                <el-collapse-item :title="`引用来源（${msg.sources.length} 条）`">
-                  <div v-for="src in msg.sources" :key="src.chunk_index" class="chat-source-item">
-                    <div class="chat-source-header">
-                      <el-tag size="small" type="info">{{ src.filename }}</el-tag>
-                      <span class="chat-source-score">相似度 {{ (src.score * 100).toFixed(1) }}%</span>
-                    </div>
-                    <p class="chat-source-content">{{ src.content.slice(0, 200) }}</p>
-                  </div>
-                </el-collapse-item>
-              </el-collapse>
+              <div class="chat-source-chips">
+                <button
+                  v-for="(src, si) in msg.sources"
+                  :key="`chip-${si}-${src.chunk_index}`"
+                  type="button"
+                  class="chat-source-chip"
+                  :class="{ 'chat-source-chip--active': expandedSource === `${idx}-${si}` }"
+                  @click="toggleSource(idx, si)"
+                >
+                  {{ src.filename }} · {{ (src.score * 100).toFixed(0) }}%
+                </button>
+              </div>
+              <div
+                v-for="(src, si) in msg.sources"
+                v-show="expandedSource === `${idx}-${si}`"
+                :key="`detail-${si}`"
+                class="chat-source-detail"
+              >
+                <p class="chat-source-content">{{ src.content }}</p>
+              </div>
             </div>
 
             <!-- K5 反馈：只对已出完整内容的 AI 回答显示（消息 id 由 done 事件/会话详情带回） -->
@@ -246,6 +257,15 @@ const rerank = ref(false);
 const feedbackReasons = ref<string[]>([]);
 const sending = ref(false);
 const errorMsg = ref("");
+// K6：缓存命中的消息在本次会话内显示徽标（不落库）
+// K7：参数栏状态（见下方各 ref）
+// 引用芯片展开状态：`消息下标-来源下标`，同一时间展开一片
+const expandedSource = ref<string | null>(null);
+
+function toggleSource(msgIdx: number, si: number) {
+  const key = `${msgIdx}-${si}`;
+  expandedSource.value = expandedSource.value === key ? null : key;
+}
 const messages = ref<Message[]>([]);
 const msgContainer = ref<HTMLElement>();
 
@@ -808,28 +828,41 @@ onUnmounted(() => {
 }
 
 .chat-sources {
-  margin-top: 12px;
+  margin-top: var(--app-gap-sm);
 }
 
-.chat-source-item {
-  padding: 8px 0;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.chat-source-item:last-child {
-  border-bottom: none;
-}
-
-.chat-source-header {
+.chat-source-chips {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.chat-source-score {
+.chat-source-chip {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  padding: 2px 8px;
   font-size: 12px;
-  color: #909399;
+  color: #303133;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.chat-source-chip:hover {
+  border-color: #87b7ab;
+}
+
+.chat-source-chip--active {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
+}
+
+.chat-source-detail {
+  margin-top: var(--app-gap-sm);
+  padding: 8px 10px;
+  background: #fafafa;
+  border-radius: 6px;
 }
 
 .chat-source-content {

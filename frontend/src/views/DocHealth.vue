@@ -21,32 +21,18 @@
     </el-empty>
 
     <template v-if="loaded">
-      <!-- 统计卡片 -->
+      <!-- 统计卡片：本体在共用组件 StatCard.vue（Known Gap #7） -->
       <div class="stat-grid">
-        <div class="stat-card">
-          <div class="stat-num">{{ summary.total_documents }}</div>
-          <div class="stat-label">总文档</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-num">{{ summary.indexed }}</div>
-          <div class="stat-label">已索引</div>
-        </div>
-        <div class="stat-card stat-good">
-          <div class="stat-num">{{ summary.active_count }}</div>
-          <div class="stat-label">被问答命中</div>
-        </div>
-        <div class="stat-card" :class="summary.dead_count > 0 ? 'stat-bad' : 'stat-good'">
-          <div class="stat-num">{{ summary.dead_count }}</div>
-          <div class="stat-label">死文档</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-num">{{ summary.total_questions }}</div>
-          <div class="stat-label">累计问答</div>
-        </div>
-        <div class="stat-card stat-accent">
-          <div class="stat-num">{{ Math.round(summary.hit_rate * 100) }}%</div>
-          <div class="stat-label">命中率</div>
-        </div>
+        <StatCard :value="summary.total_documents" label="总文档" />
+        <StatCard :value="summary.indexed" label="已索引" />
+        <StatCard :value="summary.active_count" label="被问答命中" tone="good" />
+        <StatCard
+          :value="summary.dead_count"
+          label="死文档"
+          :tone="summary.dead_count > 0 ? 'bad' : 'good'"
+        />
+        <StatCard :value="summary.total_questions" label="累计问答" />
+        <StatCard :value="`${Math.round(summary.hit_rate * 100)}%`" label="命中率" tone="accent" />
       </div>
 
       <!-- 空知识库 -->
@@ -116,6 +102,7 @@
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
+import StatCard from "@/components/StatCard.vue";
 import { docHealthApi, type DocHealthSummary, type DeadDoc, type HotDoc } from "@/api/docHealth";
 import { kbApi } from "@/api/kbs";
 import { extractErrorMessage } from "@/api/error";
@@ -229,37 +216,12 @@ onMounted(async () => {
   margin-bottom: 24px;
 }
 
-.stat-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 16px;
-  text-align: center;
-}
-
-.stat-num {
-  font-size: 26px;
-  font-weight: 700;
-  color: #303133;
-  line-height: 1.2;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
-
-.stat-good .stat-num {
-  color: var(--el-color-success);
-}
-
-.stat-bad .stat-num {
-  color: var(--el-color-danger);
-}
-
-.stat-accent .stat-num {
-  color: var(--el-color-primary);
+/* -- 统计卡片：卡片本体在共用组件 StatCard.vue（Known Gap #7），本页只保留网格 -- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
 }
 
 .dh-section {

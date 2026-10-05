@@ -22,30 +22,16 @@
 
     <!-- 统计卡片 -->
     <div v-if="loaded" class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-num">{{ summary.total_documents }}</div>
-        <div class="stat-label">总文档</div>
-      </div>
-      <div class="stat-card stat-good">
-        <div class="stat-num">{{ summary.indexed }}</div>
-        <div class="stat-label">已索引</div>
-      </div>
-      <div class="stat-card" :class="summary.failed > 0 ? 'stat-bad' : 'stat-good'">
-        <div class="stat-num">{{ summary.failed }}</div>
-        <div class="stat-label">失败</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num">{{ summary.processing }}</div>
-        <div class="stat-label">处理中</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num">{{ summary.pending }}</div>
-        <div class="stat-label">待处理</div>
-      </div>
-      <div class="stat-card stat-accent">
-        <div class="stat-num">{{ summary.total_chunks }}</div>
-        <div class="stat-label">总切片</div>
-      </div>
+      <StatCard :value="summary.total_documents" label="总文档" />
+      <StatCard :value="summary.indexed" label="已索引" tone="good" />
+      <StatCard
+        :value="summary.failed"
+        label="失败"
+        :tone="summary.failed > 0 ? 'bad' : 'good'"
+      />
+      <StatCard :value="summary.processing" label="处理中" />
+      <StatCard :value="summary.pending" label="待处理" />
+      <StatCard :value="summary.total_chunks" label="总切片" tone="accent" />
     </div>
 
     <template v-if="loaded">
@@ -138,6 +124,7 @@
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
+import StatCard from "@/components/StatCard.vue";
 import { diagnosticsApi, type Summary, type FailureGroup, type AnomalyDoc, type Consistency } from "@/api/diagnostics";
 import { kbApi } from "@/api/kbs";
 import { extractErrorMessage } from "@/api/error";
@@ -237,45 +224,12 @@ onMounted(async () => {
   color: #909399;
 }
 
-/* -- 统计卡片 -- */
+/* -- 统计卡片：卡片本体在共用组件 StatCard.vue（Known Gap #7），本页只保留网格 -- */
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 12px;
   margin-bottom: 24px;
-}
-
-.stat-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 16px;
-  text-align: center;
-}
-
-.stat-num {
-  font-size: 26px;
-  font-weight: 700;
-  color: #303133;
-  line-height: 1.2;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
-
-.stat-good .stat-num {
-  color: var(--el-color-success);
-}
-
-.stat-bad .stat-num {
-  color: var(--el-color-danger);
-}
-
-.stat-accent .stat-num {
-  color: var(--el-color-primary);
 }
 
 /* -- 失败原因 -- */
