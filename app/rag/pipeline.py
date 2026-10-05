@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.core.models import Document
 from app.providers.base import EmbeddingProvider, LLMProvider, RerankProvider
 from app.rag.generator import Generator, citation_issues
+from app.rag.query_cache import QueryCache
 from app.rag.query_rewriter import QueryRewriter, build_rewriter
 from app.rag.reranker import Reranker
 from app.rag.retriever import Retriever
@@ -43,6 +44,8 @@ class RagAnswer:
     rewritten_query: str = ""
     # K3 批 2：答案引用了不存在的来源编号（越界）；空列表 = 引用全部有效
     citation_issues: list[int] = field(default_factory=list)
+    # K6：本次回答是否来自问答缓存（AskResponse / done 事件透传，前端展示「缓存」徽标）
+    cache_hit: bool = False
 
 
 class RagPipeline:
@@ -56,6 +59,7 @@ class RagPipeline:
         embedding: EmbeddingProvider | None = None,
         llm: LLMProvider | None = None,
         reranker: RerankProvider | None = None,
+        cache: QueryCache | None = None,
     ) -> None:
         self.settings = settings or get_settings()
 
@@ -82,6 +86,8 @@ class RagPipeline:
         self.generator = Generator(self.llm)
         # K7：全局未启用重排、但单次请求要求重排时，按需构建的强制重排器（懒建、只建一次）
         self._forced_reranker: Reranker | None = None
+        # K6：问答缓存（精确 + 语义两级，kb 级失效）——随管线装配一次，共用 session_factory
+        self.cache = cache or QueryCache(self.settings, self.session_factory, self.embedding)
 
     def ask(
         self,
@@ -99,6 +105,10 @@ class RagPipeline:
         ``rerank`` / ``model``（K7）：对话页参数，语义见 ``_maybe_rerank`` 与 ``Generator``。
         """
         k = top_k or self.settings.top_k
+        # K6：单轮请求先查缓存（多轮 history 非空一律不查不写）
+        cached = self._cache_lookup(kb_id, query, mode, k, history, model=model)
+        if cached is not None:
+            return cached
         # 检索用改写问句（消解指代），生成用原始问句（保留用户原意）
         search_query = self.rewriter.rewrite(query, history)
         hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
@@ -112,13 +122,20 @@ class RagPipeline:
         sources = self._build_sources(hits, filenames)
         issues = citation_issues(answer, len(sources))
         self._log_citation_issues(kb_id, issues, len(sources))
-        return RagAnswer(
+        result = RagAnswer(
             query=query,
             answer=answer,
             sources=sources,
             rewritten_query=search_query,
             citation_issues=issues,
         )
+        self._cache_put(
+            kb_id, query, mode, k, history,
+            answer=result.answer, sources=result.sources,
+            rewritten_query=result.rewritten_query,
+            citation_issues=result.citation_issues, model=model,
+        )
+        return result
 
     def ask_stream(
         self,
@@ -144,6 +161,30 @@ class RagPipeline:
         ``ask()``（非流式）不受影响。``rerank`` / ``model``（K7）与 ``ask()`` 同义。
         """
         k = top_k or self.settings.top_k
+
+        # K6：单轮请求命中缓存时直接重放 —— sources 照常先发（契约不变），
+        # 答案按段重放成 token 事件，done 带 cache_hit；落库由调用方照常进行。
+        cached = self._cache_lookup(kb_id, query, mode, k, history, model=model)
+        if cached is not None:
+            yield {
+                "type": "sources",
+                "sources": cached.sources,
+                "rewritten_query": cached.rewritten_query,
+                "stage": "generating",
+                "cache_hit": True,
+            }
+            step = 24
+            for i in range(0, len(cached.answer), step):
+                yield {"type": "token", "content": cached.answer[i : i + step]}
+            yield {
+                "type": "done",
+                "answer": cached.answer,
+                "sources": cached.sources,
+                "rewritten_query": cached.rewritten_query,
+                "citation_issues": cached.citation_issues,
+                "cache_hit": True,
+            }
+            return
 
         yield {"type": "stage", "stage": "rewriting"}
         search_query = self.rewriter.rewrite(query, history)
@@ -174,12 +215,19 @@ class RagPipeline:
         # 流式下答案在 done 前才拼完，越界引用只能在这里校验（与 ask() 同一函数，不漂移）
         issues = citation_issues(answer, len(sources))
         self._log_citation_issues(kb_id, issues, len(sources))
+        self._cache_put(
+            kb_id, query, mode, k, history,
+            answer=answer, sources=sources,
+            rewritten_query=search_query,
+            citation_issues=issues, model=model,
+        )
         yield {
             "type": "done",
             "answer": answer,
             "sources": sources,
             "rewritten_query": search_query,
             "citation_issues": issues,
+            "cache_hit": False,
         }
 
     @staticmethod
@@ -225,6 +273,86 @@ class RagPipeline:
                 logger.exception("按请求启用重排失败（检查重排供应商配置）")
                 raise
         return self._forced_reranker
+
+    def _cache_lookup(
+        self,
+        kb_id: int,
+        query: str,
+        mode: str | None,
+        k: int,
+        history: list | None,
+        model: str | None = None,
+    ) -> RagAnswer | None:
+        """K6：单轮请求查缓存；多轮（history 非空）或缓存关闭时不查不写。
+
+        缓存的任何故障都降级为「未命中」并留痕 —— 绝不影响问答主链路。
+        ``model`` 归一为服务端默认模型名后参与缓存键：切模型必须换缓存，
+        否则 K7 的「快慢自选」会被缓存静默吞掉。
+        """
+        if history or not self.cache.enabled:
+            return None
+        try:
+            hit = self.cache.lookup(
+                kb_id,
+                query,
+                mode or self.settings.retrieval_mode,
+                k,
+                model or self.settings.llm_model,
+            )
+        except Exception:
+            logger.warning("问答缓存读取失败，按未命中处理 kb_id=%s", kb_id, exc_info=True)
+            return None
+        if hit is None:
+            return None
+        return RagAnswer(
+            query=query,
+            answer=hit.answer,
+            sources=[SourceRef(**s) for s in hit.sources],
+            rewritten_query=hit.rewritten_query,
+            citation_issues=hit.citation_issues,
+            cache_hit=True,
+        )
+
+    def _cache_put(
+        self,
+        kb_id: int,
+        query: str,
+        mode: str | None,
+        k: int,
+        history: list | None,
+        *,
+        answer: str,
+        sources: list[SourceRef],
+        rewritten_query: str,
+        citation_issues: list[int],
+        model: str | None,
+    ) -> None:
+        """K6：问答成功后写缓存（多轮 / 缓存关闭时不写；写失败只留痕不报错）。"""
+        if history or not self.cache.enabled:
+            return
+        try:
+            self.cache.store(
+                kb_id=kb_id,
+                query=query,
+                mode=mode or self.settings.retrieval_mode,
+                top_k=k,
+                model=model or self.settings.llm_model,
+                answer=answer,
+                sources=[
+                    {
+                        "document_id": s.document_id,
+                        "filename": s.filename,
+                        "chunk_index": s.chunk_index,
+                        "content": s.content,
+                        "score": s.score,
+                    }
+                    for s in sources
+                ],
+                rewritten_query=rewritten_query,
+                citation_issues=citation_issues,
+            )
+        except Exception:
+            logger.warning("问答缓存写入失败（不影响本次回答）kb_id=%s", kb_id, exc_info=True)
 
     def _build_sources(
         self, hits: list[ScoredChunk], filenames: dict[int, str] | None = None

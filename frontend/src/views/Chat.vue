@@ -92,7 +92,10 @@
           class="chat-msg"
           :class="{ 'chat-msg--user': msg.role === 'user', 'chat-msg--assistant': msg.role === 'assistant' }"
         >
-          <div class="chat-msg-role">{{ msg.role === "user" ? "你" : "AI" }}</div>
+          <div class="chat-msg-role">
+            {{ msg.role === "user" ? "你" : "AI" }}
+            <el-tag v-if="msg.cacheHit" size="small" type="info" class="chat-cache-tag">缓存</el-tag>
+          </div>
           <div class="chat-msg-content">
             <div v-if="msg.content" class="chat-msg-text">{{ msg.content }}</div>
             <!-- K1 真流式：首个 token 到达前的阶段提示（改写 → 检索 → 重排 → 生成） -->
@@ -214,6 +217,8 @@ interface Message {
   /** K5：当前用户对这条回答的反馈 */
   feedback?: "up" | "down" | null;
   feedbackReason?: string | null;
+  /** K6：本次回答是否来自问答缓存（仅当次会话内显示，不落库） */
+  cacheHit?: boolean;
 }
 
 /** K1：后端 stage 事件 → 用户可读的进度文案 */
@@ -413,6 +418,8 @@ async function send() {
         assistantMsg.stageText = "";
         // K5：落库后的消息 id 回填，反馈才能定位到这条回答
         if (event.message_id != null) assistantMsg.id = event.message_id;
+        // K6：缓存命中的回答显示「缓存」徽标
+        assistantMsg.cacheHit = !!event.cache_hit;
       } else if (event.type === "error") {
         assistantMsg.stageText = "";
         assistantMsg.failed = true;
@@ -723,6 +730,10 @@ onUnmounted(() => {
   color: #909399;
   margin-bottom: 4px;
   padding: 0 4px;
+}
+
+.chat-cache-tag {
+  margin-left: 4px;
 }
 
 .chat-msg--user .chat-msg-content {

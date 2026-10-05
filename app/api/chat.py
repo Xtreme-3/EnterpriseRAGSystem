@@ -112,6 +112,10 @@ class AskResponse(BaseModel):
         default=None,
         description="K5：本轮 assistant 消息 id（带 conversation_id 时有值），供前端对这条回答提反馈",
     )
+    cache_hit: bool = Field(
+        default=False,
+        description="K6：本次回答是否来自问答缓存（精确/语义命中；多轮请求永不缓存）",
+    )
 
 
 class ConversationOut(BaseModel):
@@ -243,8 +247,10 @@ def _done_event(
     conversation_id: int | None,
     citation_issues: list[int],
     message_id: int | None = None,
+    cache_hit: bool = False,
 ) -> dict:
-    """SSE ``done`` 事件的载荷（K3 批 2 加 citation_issues，K5 加 message_id）。
+    """SSE ``done`` 事件的载荷（K3 批 2 加 citation_issues，K5 加 message_id，
+    K6 加 cache_hit）。
 
     抽成纯函数是为了能离线断言：路由体在数据库不可用时跑不起来，
     而这个载荷的形状是前端契约的一部分，必须被测试钉住。
@@ -256,6 +262,7 @@ def _done_event(
         "conversation_id": conversation_id,
         "citation_issues": citation_issues,
         "message_id": message_id,
+        "cache_hit": cache_hit,
     }
 
 
@@ -491,6 +498,7 @@ def ask(
         conversation_id=conv.id if conv else None,
         citation_issues=result.citation_issues,
         message_id=message_id,
+        cache_hit=result.cache_hit,
     )
 
 
@@ -581,6 +589,7 @@ def ask_stream(
                     sources = evt.get("sources") or sources
                     rewritten_query = evt.get("rewritten_query", rewritten_query)
                     citation_issues = evt.get("citation_issues") or []
+                    cache_hit = bool(evt.get("cache_hit", False))
                     # ★ 落库后置：答案已完整，此时才写日志与会话消息
                     assistant_message_id = _persist_stream_result(
                         session_factory,
@@ -599,6 +608,7 @@ def ask_stream(
                             conversation_id=conv_id,
                             citation_issues=citation_issues,
                             message_id=assistant_message_id,
+                            cache_hit=cache_hit,
                         )
                     )
 

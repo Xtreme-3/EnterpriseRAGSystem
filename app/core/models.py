@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -204,6 +205,48 @@ class MessageFeedback(Base):
     )
     rating: Mapped[str] = mapped_column(String(10))  # up | down
     reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class QueryCache(Base):
+    """问答缓存（K6）：kb 内规范化问题 → 答案 + 来源，精确 / 语义两级命中。
+
+    - (kb_id, query_norm, mode, top_k, model) 唯一：同库同问**同参数**只有一条缓存
+      —— top_k / model 必须参与键：否则对话页的「条数」和「模型切换」会被缓存
+      静默吞掉（测试照出后修正，见 progress-log K6）；
+    - 语义命中同样限定同 mode + top_k + model，只对**问法**做余弦宽容；
+    - ``embedding`` 存 float32 packed BLOB，语义命中时现算**查询**向量与条目比余弦，
+      不需要把缓存向量放进向量库（几百条规模纯 Python 余弦 <10ms）；
+    - 失效是 kb 级全量：文档增删由应用层清空该库（见 app/rag/query_cache.py），
+      删库走 FK 级联；不设 TTL；
+    - ``hit_count`` / ``updated_at`` 供命中率观测与 LRU 淘汰。
+    """
+
+    __tablename__ = "query_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "kb_id", "query_norm", "mode", "top_k", "model", name="uq_query_cache"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kb_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    query_norm: Mapped[str] = mapped_column(String(2000))  # 折叠空白 + lower 的规范化键
+    query: Mapped[str] = mapped_column(Text)  # 首次写入时的原始问句（展示 / 调试）
+    mode: Mapped[str] = mapped_column(String(20))  # vector | hybrid
+    top_k: Mapped[int] = mapped_column(Integer)
+    answer: Mapped[str] = mapped_column(Text)
+    sources: Mapped[str] = mapped_column(Text, default="[]")  # JSON：SourceRef 字段
+    rewritten_query: Mapped[str] = mapped_column(String(1000), default="")
+    citation_issues: Mapped[str] = mapped_column(Text, default="[]")  # JSON：越界编号
+    model: Mapped[str] = mapped_column(String(100), default="")  # 生成时的模型（观测用）
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

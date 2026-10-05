@@ -24,6 +24,8 @@ export interface AskResponse {
   conversation_id?: number | null;
   /** K5：本轮 assistant 消息 id（带 conversation_id 时有值），供反馈定位 */
   message_id?: number | null;
+  /** K6：本次回答是否来自问答缓存 */
+  cache_hit?: boolean;
 }
 
 export interface SseToken {
@@ -63,6 +65,8 @@ export interface SseDone {
   conversation_id?: number | null;
   /** K5：本轮落库后的 assistant 消息 id，前端据此对刚回答的这条提反馈 */
   message_id?: number | null;
+  /** K6：本次回答是否来自问答缓存（命中时前端显示「缓存」徽标） */
+  cache_hit?: boolean;
 }
 
 export type SseEvent = SseToken | SseSources | SseStage | SseError | SseDone;

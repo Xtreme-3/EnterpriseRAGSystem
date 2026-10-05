@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     # （预算没被思维链吃掉）。演示场景建议关。
     llm_enable_thinking: str = ""  # "" | "true" | "false"
 
+    # ---- 问答缓存（K6）----
+    # 精确命中（L1）：同库 + 规范化同问（折叠空白 + lower）+ 同 mode + 同 top_k
+    # 直接返回缓存答案 —— 键完全一致，零错答风险，可默认开。
+    cache_enabled: bool = True
+    # 语义命中（L2）：现算查询向量与缓存条目余弦 ≥ 阈值即命中，answer/sources 按缓存
+    # 原样返回。语义缓存唯一的实质风险是"不同问题拿到同一条答案"，所以这个值是
+    # **量出来的，不是拍的**（2026-10-05，qwen3.7-text-embedding，20 对探针）：
+    #   同义改写对 10 对余弦最低 0.8092（"医疗期是怎么规定的→病假医疗期如何划分"）
+    #   易混意图对 8 对余弦最高 0.7559（"医疗期是怎么规定的→医疗期内的工资怎么发放"）
+    # 0.78 落在间隙内且不贴边（0.80 会离同义最低分只剩 0.009）。
+    # 护栏测试：tests/test_cache.py::test_default_cache_semantic_threshold_in_measured_gap
+    # ⚠️ 换 embedding 供应商或大改语料后必须重测：python scripts/k6_cache_eval.py
+    cache_semantic: bool = True
+    cache_semantic_threshold: float = 0.78
+    # 每库缓存条数上限，超限按 LRU（updated_at 最旧先淘汰）。
+    # 不做 TTL：kb 级失效（文档一有增删即清空该库）已保证不给旧答案，TTL 纯属多余。
+    cache_max_entries: int = 500
+
     # ---- RAG 参数 ----
     chunk_size: int = 800
     chunk_overlap: int = 120
@@ -150,6 +168,14 @@ class Settings(BaseSettings):
         v = (v or "").strip().lower()
         if v not in ("", "true", "false"):
             raise ValueError("llm_enable_thinking 只能是空、true 或 false")
+        return v
+
+    @field_validator("cache_semantic_threshold")
+    @classmethod
+    def _validate_cache_threshold(cls, v: float) -> float:
+        """语义命中阈值必须落在 (0, 1]：余弦的合法值域，且 0 会让任何条目都命中。"""
+        if not 0 < v <= 1:
+            raise ValueError("cache_semantic_threshold 必须在 (0, 1] 区间内")
         return v
 
     @property

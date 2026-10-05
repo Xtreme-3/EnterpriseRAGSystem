@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db, get_ingestion
+from app.api.deps import get_current_user, get_db, get_ingestion, get_rag
 from app.api.kbs import _get_user_kb_or_403
 from app.core.models import Document, User
 from app.ingestion.parsers import SUPPORTED_EXTS
@@ -101,7 +101,18 @@ def upload_document(
         except Exception:
             pass
 
+    # K6：文档一有增删，该库问答缓存全量失效 —— 宁可少命中，绝不给旧答案
+    _invalidate_cache(request, kb_id)
+
     return doc
+
+
+def _invalidate_cache(request: Request, kb_id: int) -> None:
+    """K6：失效该库问答缓存。失效失败不影响文档操作本身（只留痕）。"""
+    try:
+        get_rag(request).cache.invalidate_kb(kb_id)
+    except Exception:
+        logger.warning("问答缓存失效失败（不影响文档操作）kb_id=%s", kb_id, exc_info=True)
 
 
 @router.get("/documents/{doc_id}", response_model=DocumentResponse)
@@ -159,5 +170,8 @@ def delete_document(
         ingest.delete_document(doc_id)
     except Exception:
         logger.exception("删除文档向量/元数据失败 doc_id=%s", doc_id)
+
+    # K6：同上 —— 文档删除后该库缓存全量失效
+    _invalidate_cache(request, doc.kb_id)
 
     return {"status": "deleted"}
