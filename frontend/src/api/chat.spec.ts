@@ -23,14 +23,18 @@ describe("askStreamRequest K7 参数", () => {
   });
 
   function stubFetch() {
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, body: {} }));
+    // 显式声明入参类型：无参 vi.fn 的 calls 是空元组，取 calls[0][1] 会被 TS 拒绝
+    // （容器里的 vue-tsc 抓出来过 —— 本地验证命令曾把退出码接在管道上而漏报）
+    const fetchMock = vi.fn(
+      async (_input: string | URL, _init?: RequestInit) => ({ ok: true, status: 200, body: {} })
+    );
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
 
   function requestBody(fetchMock: ReturnType<typeof stubFetch>): Record<string, unknown> {
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    return JSON.parse(init.body as string) as Record<string, unknown>;
+    const init = fetchMock.mock.calls[0][1] as RequestInit | undefined;
+    return JSON.parse((init?.body ?? "{}") as string) as Record<string, unknown>;
   }
 
   it("把 top_k / rerank / model 写进请求体", async () => {
