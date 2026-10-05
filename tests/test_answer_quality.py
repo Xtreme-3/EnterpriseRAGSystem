@@ -41,13 +41,23 @@ class _RecordingLLM(LLMProvider):
         self.calls: list[dict] = []
 
     def complete(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> str:
         self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
         return "答案"
 
     def stream(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> Iterator[str]:
         self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
         yield "答案"
@@ -276,7 +286,9 @@ def test_generate_returns_diagnostic_instead_of_blank_answer() -> None:
     from app.rag.generator import LLM_EMPTY_ANSWER
 
     class _BlankLLM(_RecordingLLM):
-        def complete(self, prompt, *, max_tokens=None, system=None) -> str:  # type: ignore[override]
+        def complete(
+            self, prompt, *, max_tokens=None, system=None, model=None
+        ) -> str:  # type: ignore[override]
             self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
             return "   "
 
@@ -288,7 +300,7 @@ def test_stream_returns_diagnostic_instead_of_blank_answer() -> None:
     from app.rag.generator import LLM_EMPTY_ANSWER
 
     class _BlankStreamLLM(_RecordingLLM):
-        def stream(self, prompt, *, max_tokens=None, system=None):  # type: ignore[override]
+        def stream(self, prompt, *, max_tokens=None, system=None, model=None):  # type: ignore[override]
             self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
             yield from ()
 
@@ -553,7 +565,9 @@ def test_pipeline_ask_reports_citation_issues(
     )
 
     class _BadCiteLLM(_RecordingLLM):
-        def complete(self, prompt, *, max_tokens=None, system=None) -> str:  # type: ignore[override]
+        def complete(
+            self, prompt, *, max_tokens=None, system=None, model=None
+        ) -> str:  # type: ignore[override]
             self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
             return "结论见 [1]，补充见 [8]。"  # 只有 1 个来源，[8] 越界
 
@@ -588,7 +602,7 @@ def test_pipeline_stream_done_event_reports_citation_issues(
     )
 
     class _BadCiteLLM(_RecordingLLM):
-        def stream(self, prompt, *, max_tokens=None, system=None):  # type: ignore[override]
+        def stream(self, prompt, *, max_tokens=None, system=None, model=None):  # type: ignore[override]
             self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
             yield "结论见 [1]，补充见 [8]。"
 

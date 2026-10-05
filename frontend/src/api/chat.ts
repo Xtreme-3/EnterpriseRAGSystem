@@ -22,6 +22,8 @@ export interface AskResponse {
   sources: SourceRef[];
   rewritten_query: string;
   conversation_id?: number | null;
+  /** K5：本轮 assistant 消息 id（带 conversation_id 时有值），供反馈定位 */
+  message_id?: number | null;
 }
 
 export interface SseToken {
@@ -59,9 +61,55 @@ export interface SseDone {
   answer: string;
   rewritten_query?: string;
   conversation_id?: number | null;
+  /** K5：本轮落库后的 assistant 消息 id，前端据此对刚回答的这条提反馈 */
+  message_id?: number | null;
 }
 
 export type SseEvent = SseToken | SseSources | SseStage | SseError | SseDone;
+
+// ---- K7 对话页参数 ----
+
+/** GET /api/config/chat：服务端下发的可调参数配置 */
+export interface ChatOptions {
+  /** 可切换的模型清单（llm_model 恒在首位 = 服务端默认） */
+  models: string[];
+  /** 服务端是否启用了重排（RERANK=false 时前端开关置灰） */
+  rerank: boolean;
+  /** 服务端默认检索条数（Settings.top_k） */
+  top_k_default: number;
+  /** K5：反馈原因标签清单（唯一来源，前端不得自造，否则后端 422） */
+  feedback_reasons: string[];
+}
+
+export const configApi = {
+  chatOptions(): Promise<ChatOptions> {
+    return client.get("/config/chat").then((r) => r.data);
+  },
+};
+
+// ---- K5 答案反馈 ----
+
+export type FeedbackRating = "up" | "down";
+
+export interface FeedbackResult {
+  message_id: number;
+  rating: FeedbackRating | null;
+  reason: string | null;
+}
+
+export const feedbackApi = {
+  /** 提交/更换/清除一条回答的反馈：rating=null 清除；重复提交由后端 upsert 成更新 */
+  set(
+    kbId: number,
+    messageId: number,
+    rating: FeedbackRating | null,
+    reason: string | null = null
+  ): Promise<FeedbackResult> {
+    return client
+      .post(`/kbs/${kbId}/messages/${messageId}/feedback`, { rating, reason })
+      .then((r) => r.data);
+  },
+};
 
 // ---- J2 会话 ----
 
@@ -80,6 +128,9 @@ export interface ConversationMessage {
   sources: SourceRef[];
   rewritten_query: string;
   created_at: string;
+  /** K5：当前用户对这条回答的反馈（未评分为 null；只返回自己的，不含他人评价） */
+  feedback?: "up" | "down" | null;
+  feedback_reason?: string | null;
 }
 
 export interface ConversationDetail extends Conversation {
@@ -115,6 +166,12 @@ export interface AskStreamOptions {
   mode?: string;
   conversationId?: number;
   history?: ChatTurn[];
+  /** K7：检索条数（1–10）；不传用服务端默认 */
+  topK?: number;
+  /** K7：是否重排；不传跟随服务端配置 */
+  rerank?: boolean;
+  /** K7：本次生成模型（须在 ChatOptions.models 内）；不传用服务端默认 */
+  model?: string;
 }
 
 export async function askStreamRequest(
@@ -128,6 +185,15 @@ export async function askStreamRequest(
     body.conversation_id = opts.conversationId;
   } else if (opts.history?.length) {
     body.history = opts.history;
+  }
+  if (opts.topK != null && opts.topK > 0) {
+    body.top_k = opts.topK;
+  }
+  if (opts.rerank != null) {
+    body.rerank = opts.rerank;
+  }
+  if (opts.model) {
+    body.model = opts.model;
   }
 
   const resp = await fetch(`/api/kbs/${kbId}/ask/stream`, {

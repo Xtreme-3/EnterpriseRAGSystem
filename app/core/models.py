@@ -180,3 +180,31 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class MessageFeedback(Base):
+    """答案反馈（K5）：对一条 ChatMessage 的赞/踩 + 可选原因标签。
+
+    独立成表而不是给 chat_messages 加列：create_all 零迁移；(message_id, user_id)
+    唯一约束保证同一条消息一个人只有一票（重复提交是更新，不是插新行）。
+    级联链与消息一致：会话 / 知识库删除后反馈无意义，随行删除。
+    """
+
+    __tablename__ = "message_feedback"
+    __table_args__ = (
+        UniqueConstraint("message_id", "user_id", name="uq_message_feedback"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    rating: Mapped[str] = mapped_column(String(10))  # up | down
+    reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

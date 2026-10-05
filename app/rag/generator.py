@@ -118,11 +118,13 @@ class Generator:
         chunks: list[ScoredChunk],
         history: list | None = None,
         filenames: dict[int, str] | None = None,
+        model: str | None = None,
     ) -> str:
+        """``model``（K7）：对话页模型切换，``None`` = 用装配时的默认模型。"""
         if not chunks:
             return NO_HIT_ANSWER
         prompt = self.build_prompt(query, chunks, history=history, filenames=filenames)
-        answer = self._llm.complete(prompt, system=SYSTEM_PROMPT)
+        answer = self._llm.complete(prompt, system=SYSTEM_PROMPT, model=model)
         # 推理模型把预算耗在 reasoning 上时会返回空正文（见 LLM_EMPTY_ANSWER 注释）
         return answer if answer.strip() else LLM_EMPTY_ANSWER
 
@@ -132,19 +134,20 @@ class Generator:
         chunks: list[ScoredChunk],
         history: list | None = None,
         filenames: dict[int, str] | None = None,
+        model: str | None = None,
     ) -> Iterator[str]:
         """K1 真流式：逐段产出答案增量。
 
         检索为空时**不调用大模型**，直接产出固定文案（与 generate 同文案）。
         与 ``generate`` 共用同一个 system 与同一份 prompt（避免两处漂移导致
-        流式与非流式答案风格不一致）。
+        流式与非流式答案风格不一致）；``model``（K7）同理两侧一致。
         """
         if not chunks:
             yield NO_HIT_ANSWER
             return
         prompt = self.build_prompt(query, chunks, history=history, filenames=filenames)
         produced = False
-        for token in self._llm.stream(prompt, system=SYSTEM_PROMPT):
+        for token in self._llm.stream(prompt, system=SYSTEM_PROMPT, model=model):
             produced = produced or bool(token)
             yield token
         # 一个非空 token 都没有：给可读提示，别让前端一直空转/显示气泡。

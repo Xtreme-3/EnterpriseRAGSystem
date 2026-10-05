@@ -61,11 +61,22 @@ class OpenAICompatLLM(LLMProvider):
         return messages
 
     def _params(
-        self, prompt: str, max_tokens: int | None, system: str | None, *, stream: bool
+        self,
+        prompt: str,
+        max_tokens: int | None,
+        system: str | None,
+        *,
+        stream: bool,
+        model: str | None = None,
     ) -> dict:
-        """两种模式的公共请求参数，避免 complete/stream 漂移。"""
+        """两种模式的公共请求参数，避免 complete/stream 漂移。
+
+        ``model``（K7）：``None`` = 用装配时的默认模型；显式传值则覆盖本次请求
+        （对话页快慢自选）。OpenAI 客户端本身与模型无关 —— 切模型**不需要**
+        重建连接，传对字段就够。
+        """
         params: dict = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": self._messages(prompt, system),
             "max_tokens": self._max_tokens if max_tokens is None else max_tokens,
             "temperature": self._temperature,
@@ -78,17 +89,24 @@ class OpenAICompatLLM(LLMProvider):
         return params
 
     def complete(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> str:
         resp = self._client.chat.completions.create(
-            **self._params(prompt, max_tokens, system, stream=False)
+            **self._params(prompt, max_tokens, system, stream=False, model=model)
         )
         choice = resp.choices[0]
         effective = self._max_tokens if max_tokens is None else max_tokens
-        self._warn_if_truncated(choice, resp, effective)
+        self._warn_if_truncated(choice, resp, effective, model or self._model)
         return choice.message.content or ""
 
-    def _warn_if_truncated(self, choice: object, resp: object, max_tokens: int) -> None:
+    def _warn_if_truncated(
+        self, choice: object, resp: object, max_tokens: int, model: str
+    ) -> None:
         """答案被 max_tokens 砍断时留下告警（K3）。
 
         推理模型（qwen3.8-flash 等）的 ``reasoning_tokens`` 与正文**共用**同一份
@@ -102,14 +120,19 @@ class OpenAICompatLLM(LLMProvider):
             "LLM 答案被 max_tokens 截断（finish_reason=length）：model=%s max_tokens=%s "
             "completion_tokens=%s reasoning_tokens=%s。推理模型的 reasoning token 与正文"
             "共用预算，建议调大 LLM_MAX_TOKENS。",
-            self._model,
+            model,
             max_tokens,
             getattr(usage, "completion_tokens", None),
             getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None),
         )
 
     def stream(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> Iterator[str]:
         """K1 真流式：逐 delta.content 产出增量文本。
 
@@ -122,27 +145,28 @@ class OpenAICompatLLM(LLMProvider):
         而流式恰恰是先给用户看半句话就已经"完成"了，比非流式更隐蔽。
         """
         effective = self._max_tokens if max_tokens is None else max_tokens
+        used_model = model or self._model
         warned = False
         for chunk in self._client.chat.completions.create(
-            **self._params(prompt, max_tokens, system, stream=True)
+            **self._params(prompt, max_tokens, system, stream=True, model=model)
         ):
             choices = getattr(chunk, "choices", None)
             if not choices:
                 continue
             choice = choices[0]
             if not warned and getattr(choice, "finish_reason", None) == "length":
-                self._warn_stream_truncated(effective)
+                self._warn_stream_truncated(effective, used_model)
                 warned = True  # 同一轮只告警一次，避免供应商重复下发时刷屏
             content = getattr(getattr(choice, "delta", None), "content", None)
             if content:
                 yield content
 
-    def _warn_stream_truncated(self, max_tokens: int) -> None:
+    def _warn_stream_truncated(self, max_tokens: int, model: str) -> None:
         logger.warning(
             "LLM 流式答案被 max_tokens 截断（finish_reason=length）：model=%s max_tokens=%s。"
             "流已开始，HTTP 状态码无法再改，前端会把半截答案当最终答案呈现；"
             "建议调大 LLM_MAX_TOKENS，或在推理模型上关掉 thinking。",
-            self._model,
+            model,
             max_tokens,
         )
 

@@ -66,12 +66,18 @@ class MockLLM(LLMProvider):
     _SOURCE_HEADER = re.compile(r"^（来源：.*?）\n?")
 
     def complete(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> str:
-        """``system`` / ``max_tokens`` 本实现忽略。
+        """``system`` / ``max_tokens`` / ``model`` 本实现忽略。
 
         Mock 不做语言组织，也就无所谓角色分离；但签名必须能吃下 ``system``，
         否则接了真实 Generator 的调用在 mock 模式下会直接 TypeError。
+        ``model``（K7）同理：对话页可切模型，Mock 只有一套答案逻辑，忽略即可。
         """
         query, context_blocks = self._parse_prompt(prompt)
         if not context_blocks:

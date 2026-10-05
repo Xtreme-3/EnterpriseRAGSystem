@@ -26,7 +26,12 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def complete(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> str:
         """单轮补全，返回完整文本。
 
@@ -36,10 +41,19 @@ class LLMProvider(ABC):
 
         ``max_tokens``：``None`` 表示用**实现自身**的默认上限（由配置注入，
         见 ``Settings.llm_max_tokens``）；显式传值则优先。
+
+        ``model``（K7）：本次生成使用的模型名；``None`` 表示用实现装配时的默认模型。
+        实现可以忽略（如 MockLLM），但签名必须能吃下它 —— 否则对话页的模型切换
+        一接上，mock 链路就 TypeError（与 ``system`` 同一条契约）。
         """
 
     def stream(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> Iterator[str]:
         """逐段产出增量文本（K1 真流式）。
 
@@ -47,7 +61,7 @@ class LLMProvider(ABC):
         （如 MockLLM）行为与改动前完全一致**——离线与已有测试零回归。
         支持流式的实现应覆写本方法（见 OpenAICompatLLM.stream）。
         """
-        yield self.complete(prompt, max_tokens=max_tokens, system=system)
+        yield self.complete(prompt, max_tokens=max_tokens, system=system, model=model)
 
 
 class RerankProvider(ABC):

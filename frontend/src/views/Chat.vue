@@ -43,6 +43,38 @@
           <el-radio-button value="hybrid">混合</el-radio-button>
           <el-radio-button value="vector">纯向量</el-radio-button>
         </el-radio-group>
+        <!-- K7 参数栏：模型 / 检索条数 / 重排（服务端未启用重排时置灰） -->
+        <el-select
+          v-if="modelChoices.length > 1"
+          v-model="model"
+          size="small"
+          class="chat-model"
+          aria-label="模型"
+        >
+          <el-option v-for="m in modelChoices" :key="m" :label="m" :value="m" />
+        </el-select>
+        <span class="chat-param">
+          <span class="chat-param-label">条数</span>
+          <el-input-number
+            v-model="topK"
+            size="small"
+            :min="1"
+            :max="10"
+            controls-position="right"
+            class="chat-topk"
+            aria-label="检索条数"
+          />
+        </span>
+        <el-tooltip
+          content="服务端未启用重排（RERANK=false），开启不产生效果"
+          :disabled="rerankAvailable"
+          placement="top"
+        >
+          <span class="chat-param">
+            <span class="chat-param-label">重排</span>
+            <el-switch v-model="rerank" size="small" :disabled="!rerankAvailable" />
+          </span>
+        </el-tooltip>
         <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
       </div>
 
@@ -87,6 +119,37 @@
                 </el-collapse-item>
               </el-collapse>
             </div>
+
+            <!-- K5 反馈：只对已出完整内容的 AI 回答显示（消息 id 由 done 事件/会话详情带回） -->
+            <div
+              v-if="msg.role === 'assistant' && !msg.streaming && msg.content && msg.id"
+              class="chat-feedback"
+            >
+              <el-button
+                text
+                size="small"
+                class="chat-feedback-btn"
+                :class="{ 'chat-feedback-btn--active': msg.feedback === 'up' }"
+                @click="rate(msg, 'up')"
+              >有用</el-button>
+              <el-button
+                text
+                size="small"
+                class="chat-feedback-btn"
+                :class="{ 'chat-feedback-btn--active': msg.feedback === 'down' }"
+                @click="rate(msg, 'down')"
+              >没用</el-button>
+            </div>
+            <div v-if="msg.feedback === 'down' && msg.id" class="chat-feedback-reasons">
+              <span>原因：</span>
+              <span
+                v-for="r in feedbackReasons"
+                :key="r"
+                class="chat-reason-chip"
+                :class="{ 'chat-reason-chip--active': msg.feedbackReason === r }"
+                @click="setReason(msg, r)"
+              >{{ r }}</span>
+            </div>
           </div>
         </div>
 
@@ -128,6 +191,8 @@ import {
   askStreamRequest,
   parseSseStream,
   conversationApi,
+  configApi,
+  feedbackApi,
   type Conversation,
   type SourceRef,
 } from "@/api/chat";
@@ -135,6 +200,8 @@ import { kbApi } from "@/api/kbs";
 import { extractErrorMessage, isAbortError } from "@/api/error";
 
 interface Message {
+  /** K5：落库后的消息 id（流式在 done 事件回填），反馈定位用 */
+  id?: number;
   role: "user" | "assistant";
   content: string;
   sources: SourceRef[];
@@ -144,6 +211,9 @@ interface Message {
   /** K1：流内 error 事件 / 请求异常导致的失败态 */
   failed?: boolean;
   failReason?: string;
+  /** K5：当前用户对这条回答的反馈 */
+  feedback?: "up" | "down" | null;
+  feedbackReason?: string | null;
 }
 
 /** K1：后端 stage 事件 → 用户可读的进度文案 */
@@ -161,6 +231,14 @@ const kbId = Number(route.params.kbId);
 const kbName = ref("加载中...");
 const input = ref("");
 const mode = ref("hybrid");
+// K7 参数栏：配置从 /api/config/chat 取，加载失败保持默认（服务端默认生效）
+const modelChoices = ref<string[]>([]);
+const model = ref("");
+const topK = ref(5);
+const rerankAvailable = ref(false);
+const rerank = ref(false);
+// K5：反馈原因标签（清单来自 /api/config/chat，前端不自造）
+const feedbackReasons = ref<string[]>([]);
 const sending = ref(false);
 const errorMsg = ref("");
 const messages = ref<Message[]>([]);
@@ -230,10 +308,13 @@ async function selectConversation(conv: Conversation) {
   try {
     const detail = await conversationApi.detail(kbId, conv.id);
     messages.value = detail.messages.map((m) => ({
+      id: m.id,
       role: m.role,
       content: m.content,
       sources: m.sources,
       streaming: false,
+      feedback: m.feedback ?? null,
+      feedbackReason: m.feedback_reason ?? null,
     }));
     scrollBottom();
   } catch {
@@ -298,6 +379,9 @@ async function send() {
       signal: abortController.signal,
       mode: mode.value,
       conversationId: convId,
+      topK: topK.value,
+      rerank: rerank.value,
+      model: model.value || undefined,
     });
     const reader = resp.body!.getReader();
 
@@ -327,6 +411,8 @@ async function send() {
         // K1：用后端完整答案校准累积的 token，避免丢包导致半条答案
         if (event.answer) assistantMsg.content = event.answer;
         assistantMsg.stageText = "";
+        // K5：落库后的消息 id 回填，反馈才能定位到这条回答
+        if (event.message_id != null) assistantMsg.id = event.message_id;
       } else if (event.type === "error") {
         assistantMsg.stageText = "";
         assistantMsg.failed = true;
@@ -363,6 +449,47 @@ async function send() {
   }
 }
 
+/** K7：加载对话页可调参数的服务端配置（模型清单 / 重排可用性 / 默认条数 / 反馈标签） */
+async function loadChatOptions() {
+  try {
+    const opts = await configApi.chatOptions();
+    modelChoices.value = opts.models;
+    model.value = opts.models[0] || "";
+    rerankAvailable.value = opts.rerank;
+    rerank.value = opts.rerank;
+    topK.value = opts.top_k_default;
+    feedbackReasons.value = opts.feedback_reasons || [];
+  } catch {
+    // 配置加载失败：参数保持默认值，不阻塞对话主流程
+  }
+}
+
+// ---- K5 答案反馈 ----
+
+/** 点同一个按钮 = 取消（rating=null 清除）；换边 = 更新 */
+async function rate(msg: Message, rating: "up" | "down") {
+  if (msg.id == null) return;
+  const next = msg.feedback === rating ? null : rating;
+  try {
+    const res = await feedbackApi.set(kbId, msg.id, next);
+    msg.feedback = res.rating;
+    if (res.rating == null) msg.feedbackReason = null;
+  } catch (e: any) {
+    errorMsg.value = extractErrorMessage(e, "反馈提交失败");
+  }
+}
+
+/** 「没用」后选原因标签：同一票上更新 reason */
+async function setReason(msg: Message, reason: string) {
+  if (msg.id == null) return;
+  try {
+    const res = await feedbackApi.set(kbId, msg.id, "down", reason);
+    msg.feedbackReason = res.reason;
+  } catch (e: any) {
+    errorMsg.value = extractErrorMessage(e, "反馈提交失败");
+  }
+}
+
 onMounted(async () => {
   try {
     const kb = await kbApi.list().then((list) => list.find((k) => k.id === kbId));
@@ -371,6 +498,7 @@ onMounted(async () => {
     kbName.value = `知识库 #${kbId}`;
   }
   loadConversations();
+  loadChatOptions();
 });
 
 onUnmounted(() => {
@@ -497,6 +625,71 @@ onUnmounted(() => {
   font-size: 12px;
   color: #c0c4cc;
   margin-left: auto;
+}
+
+/* K7 参数栏 */
+.chat-model {
+  width: 150px;
+}
+
+.chat-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-param-label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.chat-topk {
+  width: 96px;
+}
+
+/* K5 答案反馈 */
+.chat-feedback {
+  margin-top: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.chat-feedback-btn {
+  color: #909399;
+  height: auto;
+  padding: 2px 6px;
+}
+
+.chat-feedback-btn--active {
+  color: var(--el-color-primary);
+}
+
+.chat-feedback-reasons {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.chat-reason-chip {
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: #606266;
+}
+
+.chat-reason-chip:hover {
+  border-color: #87b7ab;
+}
+
+.chat-reason-chip--active {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
 }
 
 .chat-messages {

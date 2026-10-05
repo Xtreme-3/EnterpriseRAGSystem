@@ -50,13 +50,23 @@ class _StubLLM(LLMProvider):
         self.stream_calls = 0
 
     def complete(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> str:
         self.complete_calls += 1
         return "".join(self.tokens)
 
     def stream(
-        self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        system: str | None = None,
+        model: str | None = None,
     ) -> Iterator[str]:
         self.stream_calls += 1
         for i, tok in enumerate(self.tokens):
@@ -127,7 +137,12 @@ def test_base_stream_default_yields_complete_once() -> None:
 
     class _Only(LLMProvider):
         def complete(
-            self, prompt: str, *, max_tokens: int | None = None, system: str | None = None
+            self,
+            prompt: str,
+            *,
+            max_tokens: int | None = None,
+            system: str | None = None,
+            model: str | None = None,
         ) -> str:
             return "整段答案"
 

@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # ---- 模型 ----
     embedding_model: str = "text-embedding-v3"
     llm_model: str = "qwen-plus"
+    # 对话页可切换的模型清单（K7）：逗号分隔，如 "qwen3.8-flash,qwen-turbo"。
+    # 留空 = 只能用 llm_model 一个（对话页不显示模型下拉）。
+    # 清单里的名字必须是供应商实际存在的模型，否则请求期才报错。
+    llm_model_options: str = ""
     embedding_dim: int = 1024  # text-embedding-v3=1024；zhipu embedding-3=2048 时改这里
     # 生成参数（K3）：原先硬编码在 OpenAICompatLLM._params 里。低温是为了让答案贴着资料，
     # 减少编造；max_tokens 限制单次答案长度上限。
@@ -152,6 +156,12 @@ class Settings(BaseSettings):
     def thinking_flag(self) -> bool | None:
         """三态映射："" → None（不下发字段）。"""
         return {"": None, "true": True, "false": False}[self.llm_enable_thinking]
+
+    @property
+    def llm_model_choices(self) -> list[str]:
+        """对话页「模型切换」的候选清单（K7）：``llm_model`` 恒在首位（服务端默认）。"""
+        extra = [m.strip() for m in self.llm_model_options.split(",") if m.strip()]
+        return [self.llm_model] + [m for m in extra if m != self.llm_model]
 
     def model_post_init(self, _context) -> None:
         """启动时校验：JWT secret 不能使用默认值（生产部署安全要求）。"""
