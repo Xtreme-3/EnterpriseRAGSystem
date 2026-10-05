@@ -35,6 +35,28 @@
     </div>
 
     <template v-if="loaded">
+      <!-- 摄取健康：正常态压成状态条（评审 P0-1：信息密度不该比异常态还低） -->
+      <section class="diag-section" v-if="summary.total_documents > 0">
+        <h3 class="section-title">摄取健康</h3>
+        <div
+          class="status-bar"
+          :class="failures.length === 0 ? 'status-bar--good' : 'status-bar--danger'"
+        >
+          <el-icon class="status-icon">
+            <CircleCheckFilled v-if="failures.length === 0" />
+            <CircleCloseFilled v-else />
+          </el-icon>
+          <span class="status-main">
+            {{
+              failures.length === 0
+                ? "所有文档均成功索引，无失败记录"
+                : `存在摄取失败，见下方失败原因`
+            }}
+          </span>
+          <span class="status-extra">{{ summary.total_documents }} 篇 · {{ summary.total_chunks }} 切片</span>
+        </div>
+      </section>
+
       <!-- 失败原因聚合 -->
       <section class="diag-section" v-if="failures.length > 0">
         <h3 class="section-title">失败原因</h3>
@@ -58,14 +80,6 @@
         </div>
       </section>
 
-      <!-- 健康通过提示 -->
-      <el-result
-        v-else-if="failures.length === 0 && summary.total_documents > 0"
-        icon="success"
-        title="摄取健康"
-        sub-title="所有文档均成功索引，无失败记录"
-      />
-
       <!-- 异常文档清单 -->
       <section class="diag-section" v-if="anomalies.length > 0">
         <h3 class="section-title">异常文档</h3>
@@ -86,21 +100,21 @@
       <!-- 空知识库 -->
       <el-empty v-if="summary.total_documents === 0" description="知识库暂无文档，上传后这里会显示体检报告" />
 
-      <!-- 向量一致性 -->
+      <!-- 向量一致性：结论同样压成状态条，异常明细仍用表格 -->
       <section class="diag-section" v-if="summary.total_documents > 0">
         <h3 class="section-title">向量一致性</h3>
-        <el-result
+        <div
           v-if="!consistency.checked"
-          icon="warning"
-          title="向量库不可达"
-          sub-title="无法对比向量层与元数据，请检查向量库服务"
-        />
-        <el-result
-          v-else-if="consistency.issues.length === 0"
-          icon="success"
-          title="向量层与元数据一致"
-          sub-title="两侧切片计数吻合"
-        />
+          class="status-bar status-bar--warning"
+        >
+          <el-icon class="status-icon"><WarningFilled /></el-icon>
+          <span class="status-main">向量库不可达 · 无法对比，请检查向量库服务</span>
+        </div>
+        <div v-else-if="consistency.issues.length === 0" class="status-bar status-bar--good">
+          <el-icon class="status-icon"><CircleCheckFilled /></el-icon>
+          <span class="status-main">向量层与元数据一致</span>
+          <span class="status-extra">两侧切片计数吻合</span>
+        </div>
         <el-table v-else :data="consistency.issues" size="small" border>
           <el-table-column label="类型" width="110">
             <template #default="{ row }">
@@ -124,6 +138,7 @@
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
+import { CircleCheckFilled, CircleCloseFilled, WarningFilled } from "@element-plus/icons-vue";
 import StatCard from "@/components/StatCard.vue";
 import { diagnosticsApi, type Summary, type FailureGroup, type AnomalyDoc, type Consistency } from "@/api/diagnostics";
 import { kbApi } from "@/api/kbs";
@@ -222,6 +237,46 @@ onMounted(async () => {
 .diag-status-text {
   font-size: 12px;
   color: #909399;
+}
+
+/* -- 状态条（评审 P0-1）：正常/警告结论压成一行，el-result 只留给空态与错误态 -- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  min-height: 44px;
+  padding: 8px 16px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: var(--radius-card);
+}
+
+.status-icon {
+  font-size: 16px;
+  display: inline-flex;
+}
+
+.status-bar--good .status-icon {
+  color: var(--el-color-success);
+}
+
+.status-bar--warning .status-icon {
+  color: var(--el-color-warning);
+}
+
+.status-bar--danger .status-icon {
+  color: var(--el-color-danger);
+}
+
+.status-main {
+  flex: 1;
+  font-size: var(--fs-body);
+  color: var(--el-text-color-primary);
+}
+
+.status-extra {
+  font-size: var(--fs-hint);
+  color: var(--el-text-color-secondary);
 }
 
 /* -- 统计卡片：卡片本体在共用组件 StatCard.vue（Known Gap #7），本页只保留网格 -- */
