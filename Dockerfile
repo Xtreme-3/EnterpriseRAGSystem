@@ -3,6 +3,11 @@
 # 二者由根目录 docker-compose.yml 编排，外加一个 pgvector 数据库。
 FROM python:3.11-slim
 
+# 国内网络直连 PyPI 实测可能只有几十 KB/s（2026-10-05 实测 60KB/s，chromadb 拖了半小时下不完）。
+# 构建时挂国内镜像：docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 不传该参数时行为与原来完全一致。
+ARG PIP_INDEX_URL=""
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -21,7 +26,7 @@ COPY pyproject.toml README.md ./
 # 从 pyproject.toml 抽取依赖清单后安装 —— pyproject.toml 仍是唯一依赖来源，
 # 但改动 app/ 不会让这层缓存失效，省下每次重装 chromadb 的时间。
 RUN python -c "import tomllib,pathlib; p=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8')); print('\n'.join(p['project']['dependencies'] + p['project']['optional-dependencies']['api']))" > /tmp/requirements.txt \
- && pip install -r /tmp/requirements.txt
+ && pip install ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} -r /tmp/requirements.txt
 
 COPY app ./app
 
