@@ -279,11 +279,22 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 - `frontend/Dockerfile`：node 构建 SPA → nginx 托管并反代 `/api`
 - `docker-compose.yml`：`web` + `api` + `db(pgvector/pgvector:pg17)`；默认
   `VECTOR_STORE=pgvector`（元数据与向量共库，不再是 SQLite + ChromaDB）+ `RAG_PROVIDER=mock`
-- **本机端口备注（2026-10-06）**：host 8080 已被本机另一套 compose 项目
-  （`frappe_docker`/ERPNext，其配置绑定 8080 且自动重启）占用，本项目 web 起在
-  **18080**：`WEB_PORT=18080 docker compose up -d --wait`。仓库默认仍是 8080
-  （干净机器无需覆盖）。构建慢可加
-  `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+- **本机端口备注（2026-10-06 晚更正）**：本项目 web 在本机跑 **18080**，仓库默认仍是
+  **8080**（干净机器无需覆盖）。覆盖值已写进本机 `.env` 的 `WEB_PORT=18080`，
+  所以直接 `docker compose up -d --wait` 即可，不必每次手带环境变量。
+  构建慢可加 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+
+  > ⚠️ **上一条曾写"8080 被 frappe_docker 占用"，该结论已被实测推翻。**
+  > 实测 `netstat` 无进程监听 8080、`docker port frappe_docker-frontend-1` 为空
+  > （它的 nginx 在解析配置阶段就退出，**从没绑上 8080**）、8080 也不在
+  > `netsh interface ipv4 show excludedportrange protocol=tcp` 的保留段内。
+  > `forbidden by access permissions` 是 **WSAEACCES** —— 端口落在 **Windows 动态端口段**
+  > （本机当前 1024–15000，保留段每次开机漂移）时会报这个，**与"被别的进程占用"是两回事**
+  > （后者报 `address already in use`）。排查端口起不来时先分清这两者。
+  >
+  > 另：那套 `frappe_docker` 已于 2026-10-06 由用户决定整体清理（它自 9-14 建好后只活了
+  > 80 分钟、取证确认零真实数据）。**如需重装见 `D:\ERPNext-Dev\ERPNext-重装说明.md`。**
+  > 因此 8080 现在是空闲的；18080 的覆盖保留只是因为已经跑通。
 - **易踩的两个点**：①健康检查端点是 `/health`，**不带** `/api` 前缀，nginx 里需单独配 location；
   ②前端 axios `baseURL` 是相对路径 `/api`，走同源反代即可，后端**没有也不需要** CORS 配置
 - SSE 流式问答在 nginx 里必须 `proxy_buffering off`，否则答案会被缓冲到最后一次性吐出
@@ -295,7 +306,7 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 
 | | 本地开发（默认在用） | Docker 交付 |
 |---|---|---|
-| 前端 | `5173`（`npm run dev`） | `8080`（compose 默认；**本机被 frappe 占用，实际 `18080`**，见容器化节备注） |
+| 前端 | `5173`（`npm run dev`） | `8080`（compose 默认；**本机因 8080 装不上跑在 `18080`**，覆盖值在本机 `.env`，见容器化节备注） |
 | 后端 | `8000`（uvicorn） | 容器内 8000，**不映射到宿主** |
 | 元数据 | `data/rag.db`（SQLite） | 容器内 PostgreSQL |
 | 向量库 | ChromaDB | PostgreSQL + pgvector（元数据与向量共库） |
