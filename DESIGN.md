@@ -395,7 +395,7 @@ hover 时只把 `border-color` 改为 `{colors.brand-border}`。
 
 ### 侧边栏条目（对话页会话列表）
 
-6px 圆角，`padding: 8px 10px`，13px，`{colors.ink-secondary}`；
+6px 圆角，`padding: 8px 10px`，12px（2026-10-06 从 13px 收敛进四级，消除与 §三的自相矛盾），`{colors.ink-secondary}`；
 hover 底色 `{colors.canvas}`；选中项底色 `{colors.brand-soft}` + 文字 `{colors.brand}`。
 删除图标默认 `{colors.ink-disabled}`，hover 变 `{colors.danger}`。
 

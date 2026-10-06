@@ -129,8 +129,8 @@ async function handleRegister() {
 .auth-card {
   width: 400px;
   padding: 40px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--app-surface);
+  border: 1px solid var(--app-hairline);
   border-radius: var(--radius-container);
 }
 
@@ -143,7 +143,7 @@ async function handleRegister() {
 
 .auth-subtitle {
   text-align: center;
-  color: #909399;
+  color: var(--app-ink-muted);
   font-size: 14px;
   margin-bottom: 32px;
 }
@@ -155,7 +155,7 @@ async function handleRegister() {
 .auth-switch {
   text-align: center;
   font-size: 14px;
-  color: #909399;
+  color: var(--app-ink-muted);
 }
 
 .auth-switch a {

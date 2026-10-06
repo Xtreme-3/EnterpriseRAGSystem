@@ -85,10 +85,10 @@ defineEmits<{
   justify-content: space-between;
   padding: 8px 10px;
   margin-bottom: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-item);
   cursor: pointer;
   color: var(--app-ink-secondary);
-  font-size: 13px;
+  font-size: var(--fs-hint);
   transition: background 0.15s ease;
 }
 

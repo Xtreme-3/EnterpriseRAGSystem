@@ -17,12 +17,12 @@
 }
 .not-found h1 {
   font-size: 64px;
-  color: #c0c4cc;
+  color: var(--app-ink-disabled);
   margin: 0;
 }
 .not-found p {
   font-size: 18px;
-  color: #909399;
+  color: var(--app-ink-muted);
   margin-bottom: 8px;
 }
 </style>
