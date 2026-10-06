@@ -35,6 +35,9 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SMOKE_BASE", "http
 # 凭据只从环境变量取，**不设默认值**：本仓库推到 GitHub / GitCode，不能带任何口令。
 USER = os.environ.get("SMOKE_USER", "")
 PWD = os.environ.get("SMOKE_PWD", "")
+# 判断"SSE 有没有被反代缓冲"所需的最短总时长（ms）。低于它首字节与总时长都被连接
+# 开销主导，比值没有区分力 —— 见第 6 步的说明。
+MIN_STREAM_MS = int(os.environ.get("SMOKE_MIN_STREAM_MS", "200"))
 
 FAILURES: list[str] = []
 
@@ -101,6 +104,21 @@ def main() -> int:
     check("GET /health", st == 200, f"http={st}")
     st, raw = call("GET", "/")
     check("GET /（SPA）", st == 200 and b"<div id=" in raw, f"http={st}")
+
+    # 这两条专门防「被 SPA 兜底吃掉」：nginx 的 location / 用 try_files 把未匹配的
+    # 路径一律回 index.html，于是 /docs 会返回**状态码 200 的前端首页** —— 只看 http_code
+    # 完全发现不了。所以必须断言**内容特征**，光看 200 不算通过。
+    print("=== 1b. API 文档在交付入口可达（没有被 SPA 兜底吃掉）===")
+    st, raw = call("GET", "/openapi.json")
+    paths: dict = {}
+    if st == 200 and raw[:1] == b"{":
+        paths = json.loads(raw).get("paths", {})
+    check("GET /openapi.json 是真 OpenAPI 描述（不是 index.html）",
+          bool(paths), f"http={st} paths={len(paths)}")
+    st, raw = call("GET", "/docs")
+    check("GET /docs 是 Swagger UI（不是 index.html）",
+          st == 200 and b"SwaggerUIBundle" in raw,
+          f"http={st} 含 SwaggerUIBundle={b'SwaggerUIBundle' in raw}")
 
     print("=== 2. 登录 ===")
     st, raw = call("POST", "/api/auth/login", body={"username": USER, "password": PWD})
@@ -179,12 +197,25 @@ def main() -> int:
             f"/api/kbs/{kb_id}/ask/stream", token,
             {"query": question, "top_k": 5, "conversation_id": conv_id})
         joined = "\n".join(chunks)
+        print(f"      首字节={ttfb:.0f}ms 总时长={total:.0f}ms 事件块={len(chunks)}")
         check("content-type 是 text/event-stream", "text/event-stream" in ctype, ctype)
         check("含 sources 事件", "sources" in joined.lower())
         check("含 done 事件", "done" in joined.lower())
         check("答案命中 600", "600" in joined)
-        check("流未被缓冲（首字节 < 总时长一半）", ttfb < total * 0.5,
-              f"首字节={ttfb:.0f}ms 总时长={total:.0f}ms 事件块={len(chunks)}")
+
+        # 判断「流有没有被 nginx 缓冲」只在生成耗时足够长时才有区分力：被缓冲的表现是
+        # **首字节 ≈ 总时长**（整段答案攒到最后一次吐出）。但 mock 供应商是瞬时返回 ——
+        # 答案本来就在同一毫秒内生成完毕，首字节与总时长**都只由连接开销主导**，
+        # 比值毫无意义（实测撞到过 31ms / 46ms 这种"看起来像被缓冲"的噪声）。
+        # 所以设一个下限，低于它只报告、不判定，避免拿假信号当真缺陷。
+        # 换真实供应商（生成要数秒）后，这条才是有效的：首字节应 ≪ 总时长。
+        if total < MIN_STREAM_MS:
+            print(f"  [SKIP] 流未被缓冲 — 总时长仅 {total:.0f}ms（< {MIN_STREAM_MS}ms，"
+                  f"mock 供应商瞬时返回），该判据在此无区分力；"
+                  f"真实供应商下应看到首字节 ≪ 总时长")
+        else:
+            check("流未被缓冲（首字节 < 总时长一半）", ttfb < total * 0.5,
+                  f"首字节={ttfb:.0f}ms 总时长={total:.0f}ms 事件块={len(chunks)}")
     except Exception as exc:  # noqa: BLE001
         check("SSE 请求成功", False, f"{type(exc).__name__}: {exc}")
 
