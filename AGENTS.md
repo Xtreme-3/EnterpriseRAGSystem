@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（435 用例）；前端 vitest + jsdom + @vue/test-utils（58 用例）
+- **测试**：后端 pytest + httpx + TestClient（443 用例）；前端 vitest + jsdom + @vue/test-utils（58 用例）
 
 ## 目录结构
 
@@ -330,4 +330,4 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 问答缓存 K6（精确 + 语义两级，阈值实测 0.78，kb 级失效，多轮不缓存） | ✅ |
 | K4 摄取异步化（暂缓，触发条件见 docs/roadmap.md 排期决策） | ⬜ |
 
-**后端 435 测试全绿**（322 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 58 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（管理后台、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、SSO/LDAP、更多格式、RPA 集成）。
+**后端 443 测试全绿**（330 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 58 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（管理后台、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、更多格式（PPT/OCR，Excel 已完成 → K10）、RPA 集成）。

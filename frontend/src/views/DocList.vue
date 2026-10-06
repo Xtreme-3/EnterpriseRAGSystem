@@ -106,9 +106,12 @@ import { ElMessage, type UploadFile, type UploadInstance } from "element-plus";
 import { Upload, UploadFilled, Loading, ArrowLeft } from "@element-plus/icons-vue";
 import { docApi, type DocItem } from "@/api/docs";
 import { kbApi, type KBItem } from "@/api/kbs";
+import { configApi } from "@/api/chat";
 import { extractErrorMessage } from "@/api/error";
 
-const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
+// K10：受支持扩展名由后端注册表下发（/api/config/upload），拉取失败退回默认
+const DEFAULT_EXTS = [".pdf", ".docx", ".md", ".txt"];
+const supportedExts = ref<string[]>([...DEFAULT_EXTS]);
 
 const route = useRoute();
 const router = useRouter();
@@ -131,7 +134,7 @@ const pendingFile = ref<File | null>(null);
 const myRole = ref<string>("viewer");
 const canEdit = computed(() => myRole.value === "owner" || myRole.value === "editor");
 
-const acceptExts = SUPPORTED_EXTS.join(",");
+const acceptExts = computed(() => supportedExts.value.join(","));
 
 function goBack() {
   router.push("/kbs");
@@ -187,6 +190,13 @@ async function fetchDocs() {
 }
 
 async function init() {
+  // K10：拉取后端下发的受支持扩展名（失败保持默认，不阻塞页面）
+  try {
+    const cfg = await configApi.uploadConfig();
+    if (cfg.supported_exts?.length) supportedExts.value = cfg.supported_exts;
+  } catch {
+    // 保持 DEFAULT_EXTS
+  }
   try {
     const list = await kbApi.list();
     const kb = list.find((k) => k.id === kbId);
@@ -219,8 +229,8 @@ async function handleUpload() {
   // 取最后一个点之后的扩展名；无扩展名或多个点（如 .tar.gz）以后端校验为准
   const nameParts = file.name.split(".");
   const ext = nameParts.length > 1 ? "." + nameParts.pop()!.toLowerCase() : "";
-  if (!SUPPORTED_EXTS.includes(ext)) {
-    ElMessage.error(`不支持的文档类型: ${ext || "无扩展名"}（支持: ${SUPPORTED_EXTS.join(", ")}）`);
+  if (!supportedExts.value.includes(ext)) {
+    ElMessage.error(`不支持的文档类型: ${ext || "无扩展名"}（支持: ${supportedExts.value.join(", ")}）`);
     return;
   }
 

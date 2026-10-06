@@ -100,7 +100,7 @@
           <el-icon class="el-icon--upload" :size="28"><UploadFilled /></el-icon>
           <div class="el-upload__text">拖拽文件到此处，或 <em>点击选择</em></div>
           <template #tip>
-            <div class="el-upload__tip">PDF / DOCX / MD / TXT，单文件最大 20MB</div>
+            <div class="el-upload__tip">支持 {{ extsLabel }}，单文件最大 20MB</div>
           </template>
         </el-upload>
       </el-form>
@@ -168,15 +168,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadFile, type UploadInstance } from "element-plus";
 import { ArrowDown, Loading, UploadFilled } from "@element-plus/icons-vue";
 import { kbApi, type KBItem, type KBMember } from "@/api/kbs";
 import { docApi } from "@/api/docs";
+import { configApi } from "@/api/chat";
 import { extractErrorMessage } from "@/api/error";
 
-const SUPPORTED_EXTS = [".pdf", ".docx", ".md", ".txt"];
+// K10：受支持扩展名由后端注册表下发（/api/config/upload），拉取失败退回默认——
+// 前端不再各页硬编码副本（KbsList / DocList 曾各自一份，加 .xlsx 当天就三处漂移）
+const DEFAULT_EXTS = [".pdf", ".docx", ".md", ".txt"];
+const supportedExts = ref<string[]>([...DEFAULT_EXTS]);
 
 // I2 RBAC：角色徽章文案与样式（评审 P1-7：权限角色不是「告警/成功」状态，
 // 不用 warning/success —— owner 品牌色描边，editor/viewer 中性 info）
@@ -237,7 +241,12 @@ const uploadRef = ref<UploadInstance>();
 // 用 on-change 直接捕获 File，避免通过 uploadRef 内部结构取文件
 const pendingFiles = ref<File[]>([]);
 
-const acceptExts = SUPPORTED_EXTS.join(",");
+const acceptExts = computed(() => supportedExts.value.join(","));
+
+/** 上传提示文案：.pdf → PDF */
+const extsLabel = computed(() =>
+  supportedExts.value.map((e) => e.slice(1).toUpperCase()).join(" / ")
+);
 
 const form = reactive({
   name: "",
@@ -316,7 +325,7 @@ function goDashboard(kbId: number) {
 
 function validateFileExt(file: File): boolean {
   const ext = "." + file.name.split(".").pop()?.toLowerCase();
-  return SUPPORTED_EXTS.includes(ext);
+  return supportedExts.value.includes(ext);
 }
 
 async function handleCreate() {
@@ -434,7 +443,20 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN");
 }
 
-onMounted(fetchKbs);
+/** K10：拉取后端下发的受支持扩展名（失败保持默认，不阻塞页面） */
+async function loadUploadConfig() {
+  try {
+    const cfg = await configApi.uploadConfig();
+    if (cfg.supported_exts?.length) supportedExts.value = cfg.supported_exts;
+  } catch {
+    // 保持 DEFAULT_EXTS
+  }
+}
+
+onMounted(() => {
+  fetchKbs();
+  loadUploadConfig();
+});
 </script>
 
 <style scoped>

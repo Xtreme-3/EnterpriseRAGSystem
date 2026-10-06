@@ -329,5 +329,67 @@ def test_real_corpus_markdown_keeps_key_numbers(tmp_path):
 
 
 def test_unsupported_extension_raises(tmp_path):
+    # `.xlsx` 自 K10 起受支持（走 openpyxl）；真正不支持的扩展名仍拒绝
     with pytest.raises(ValueError):
-        parse_file(_write(tmp_path, "a.xlsx", "x"))
+        parse_file(_write(tmp_path, "a.doc", "x"))
+
+
+def test_corrupt_xlsx_fails_loudly(tmp_path):
+    """损坏的 .xlsx（非 zip 结构）→ openpyxl 抛错 → 摄取标记 failed，不静默吞。"""
+    with pytest.raises(Exception):
+        parse_file(_write(tmp_path, "broken.xlsx", "this is not a zip archive"))
+
+
+# ---- Excel（K10）----
+
+from openpyxl import Workbook
+
+
+def _make_xlsx(tmp_path, name: str = "t.xlsx", sheets: dict | None = None):
+    """用 openpyxl 生成真实 xlsx（不是文本伪造），sheet 名 → 二维行。"""
+    p = tmp_path / name
+    wb = Workbook()
+    first = True
+    for title, rows in (sheets or {}).items():
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = title
+        for row in rows:
+            ws.append(row)
+        first = False
+    wb.save(p)
+    return p
+
+
+def test_parse_xlsx_sheet_headings_and_rows(tmp_path):
+    """sheet 名成为小节标题；行转「列值 | 列值」；数字保持 Excel 显示原值。"""
+    p = _make_xlsx(tmp_path, sheets={
+        "差旅标准": [["城市", "上限"], ["一线城市", 600], ["二线城市", 450]],
+        "售后": [["项目", "时效"], ["退货", 30]],
+    })
+    text = parse_file(p)
+    assert "## 差旅标准" in text and "## 售后" in text
+    assert "一线城市 | 600" in text
+    assert "退货 | 30" in text
+
+
+def test_parse_xlsx_skips_empty_rows_and_cells(tmp_path):
+    """空行跳过、空单元格剔除——切片里只剩有信息量的内容。"""
+    p = _make_xlsx(tmp_path, sheets={"s": [[None, None], ["a", None, "b"], [None]]})
+    text = parse_file(p)
+    lines = [l for l in text.splitlines() if l.strip()]
+    assert lines == ["## s", "a | b"]
+
+
+def test_parse_xlsx_clean_chunks_strips_sheet_heading(tmp_path):
+    """``## sheet`` 前缀在切分后剥掉（bugfix-log #41 同款教训：## 不能残留进切片）。"""
+    p = _make_xlsx(tmp_path, sheets={"售后": [["项目", "时效"], ["退货", 30]]})
+    text = parse_file(p)
+    cleaned = clean_chunks([text], ".xlsx")
+    # _normalize 用空行分段：sheet 标题与行之间是 \n\n（不影响切分器的行首标题识别）
+    assert cleaned == ["售后\n\n项目 | 时效\n\n退货 | 30"]
+
+
+def test_parse_xlsx_registered_in_supported_exts():
+    from app.ingestion.parsers import SUPPORTED_EXTS
+
+    assert ".xlsx" in SUPPORTED_EXTS

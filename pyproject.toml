@@ -11,6 +11,7 @@ dependencies = [
     "chromadb>=0.5",
     "python-docx>=1.1",
     "pypdf>=4.0",
+    "openpyxl>=3.1",
     "psycopg2-binary>=2.9",
     "pgvector>=0.3",
     "passlib[bcrypt]>=1.7",

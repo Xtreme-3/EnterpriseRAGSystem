@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.api.chat import FEEDBACK_REASONS
 from app.api.deps import get_current_user
 from app.core.models import User
+from app.ingestion.parsers import SUPPORTED_EXTS
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -21,6 +22,10 @@ class ChatOptionsOut(BaseModel):
     rerank: bool
     top_k_default: int
     feedback_reasons: list[str] = []
+
+
+class UploadConfigOut(BaseModel):
+    supported_exts: list[str]
 
 
 @router.get("/chat", response_model=ChatOptionsOut)
@@ -40,3 +45,13 @@ def chat_options(
         top_k_default=settings.top_k,
         feedback_reasons=list(FEEDBACK_REASONS),
     )
+
+
+@router.get("/upload", response_model=UploadConfigOut)
+def upload_config(current_user: User = Depends(get_current_user)) -> UploadConfigOut:
+    """上传能力配置（K10）：受支持的扩展名由后端注册表下发。
+
+    此前 KbsList / DocList 各自硬编码一份扩展名列表——后端注册表加 `.xlsx`
+    的同一天就会产生三处漂移。前端上传口一律以本端点为准。
+    """
+    return UploadConfigOut(supported_exts=sorted(SUPPORTED_EXTS))

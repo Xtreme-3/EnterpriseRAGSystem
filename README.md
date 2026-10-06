@@ -4,7 +4,9 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **后端 435 + 前端 58** 个测试用例全绿 · **31** 个 API 端点 · **11** 个前端页面 · **4** 种文档格式 · 全链路可离线运行
+> **后端 443 + 前端 58** 个测试用例全绿 · **32** 个 API 端点 · **11** 个前端页面 · **5** 种文档格式 · 全链路可离线运行
+
+[![CI](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml/badge.svg)](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml)
 
 ---
 
@@ -49,7 +51,7 @@
                                        ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                                  核心引擎                                  │
-│    摄取  解析(PDF/DOCX/MD/TXT) → 切片(fixed / structure / 语义) → Embedding│
+│    摄取  解析(PDF/DOCX/XLSX/MD/TXT) → 切片(fixed / structure / 语义) → Embedding│
 │       问答   检索(向量 + 关键词混合) → Rerank → 生成 LLM + 溯源引用        │
 └────────────────────────────────────────────────────────────────────────────┘
                                        │
@@ -76,7 +78,7 @@
 | 能力 | 验收动作 | 关键实现 |
 |---|---|---|
 | **多租户知识库隔离** | 内置就有两个库（kb_1 业务制度 / kb_2 人事财务）。在 kb_2 里问一句只在 kb_1 有答案的（如「美国站的退货窗口是多少天？」），应正确拒答而不是串味 | 向量库按库物理隔离（`kb_{id}` 集合），检索按 `kb_id` 过滤 |
-| **文档摄取** | 传 PDF / DOCX / MD / TXT，看状态从 pending → processing → indexed | `SUPPORTED_EXTS` 注册表 + 每种格式独立解析器（md 也剥语法标记） |
+| **文档摄取** | 传 PDF / DOCX / XLSX / MD / TXT，看状态从 pending → processing → indexed | `SUPPORTED_EXTS` 注册表 + 每种格式独立解析器（md 剥语法标记，xlsx 按 sheet 切片） |
 | **三档切片策略** | 同一份文档用 `fixed` / `structure` / `semantic` 各切一次，对比块边界 | 结构优先（标题/编号条款作块起点）零成本；语义档叠加句级 embedding 找断点 |
 | **混合检索** | 搜一个**精确型号/代码**（如 `ERR-4032`），切 `vector` 与 `hybrid` 看召回差异 | 中文 2-gram + 英文保序 tokenize，双路归一化加权融合 |
 | **重排 Rerank** | 质检台里开关重排，对比检索分数与重排分数的排序变化 | `RerankProvider` 接口 + Noop / Mock / OpenAICompat 三实现 |
@@ -113,7 +115,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **435 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **443 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -185,7 +187,7 @@ app/
 └── rag/                 # retriever → reranker → query_rewriter → generator
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 30 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 435 个离线单测（mock 供应商，无需网络）
+tests/                   # 443 个离线单测（mock 供应商，无需网络）
 scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测脚本
 ```
 
@@ -213,12 +215,12 @@ scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 435 个用例，全程离线
+python -m pytest tests/ -v --tb=short       # 后端 443 个用例，全程离线
 cd frontend && npm test                     # 前端 58 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
-（当前 `435 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
+（当前 `443 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
 
 前端测试覆盖五层：纯函数（`src/api/error.ts`）、Pinia store、axios 拦截器、路由守卫、组件挂载
 （真实挂载登录页）。**前端用例大多是为 K8 已修缺陷补的回归测试**，因此 K9 落地时对其中三条做了

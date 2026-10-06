@@ -89,7 +89,15 @@ export const configApi = {
   chatOptions(): Promise<ChatOptions> {
     return client.get("/config/chat").then((r) => r.data);
   },
+  /** 上传能力配置（K10）：受支持扩展名由后端注册表下发，前端不再硬编码副本 */
+  uploadConfig(): Promise<UploadConfig> {
+    return client.get("/config/upload").then((r) => r.data);
+  },
 };
+
+export interface UploadConfig {
+  supported_exts: string[];
+}
 
 // ---- K5 答案反馈 ----
 

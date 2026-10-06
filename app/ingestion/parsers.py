@@ -1,6 +1,6 @@
-"""文档解析：PDF / Word / Markdown / 纯文本 → 纯文本。
+"""文档解析：PDF / Word / Excel / Markdown / 纯文本 → 纯文本。
 
-依赖 pypdf 与 python-docx，均为纯 Python 包。解析失败时抛 ValueError 或异常，
+依赖 pypdf、python-docx 与 openpyxl，均为纯 Python 包。解析失败时抛 ValueError 或异常，
 由 ingestion pipeline 捕获并记到 Document.status=failed。
 
 **为什么 Markdown 要单独走一条解析分支**：``.md`` 的语料里标题写 ``# 标题``、
@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-SUPPORTED_EXTS = {".pdf", ".docx", ".md", ".markdown", ".txt"}
+SUPPORTED_EXTS = {".pdf", ".docx", ".xlsx", ".md", ".markdown", ".txt"}
 
 # ---- Markdown 语法正则 ----
 
@@ -62,6 +62,8 @@ def parse_file(path: str | Path) -> str:
         return _parse_pdf(p)
     if ext == ".docx":
         return _parse_docx(p)
+    if ext == ".xlsx":
+        return _parse_xlsx(p)
     if ext in {".md", ".markdown"}:
         return _parse_markdown(p)
     if ext == ".txt":
@@ -88,6 +90,32 @@ def _parse_docx(path: Path) -> str:
 
     doc = Document(str(path))
     return _normalize("\n".join(para.text for para in doc.paragraphs))
+
+
+def _parse_xlsx(path: Path) -> str:
+    """Excel → 文本：每个 sheet 一个 ``## 标题`` 小节，行转「列值 | 列值」行文本。
+
+    - ``read_only + values_only``：流式读值、跳过样式与公式定义（``data_only``
+      取公式缓存值）——企业表格动辄上万行，不能整本载入内存；
+    - 空行跳过、空单元格剔除：切片里只剩有信息量的内容；
+    - 单元格统一 ``str()``：金额、期限、比例是检索的命脉，保持 Excel 显示原值
+      （``100`` 就是 ``100``，不引入浮点噪声）；
+    - 产物是**受控 markdown**（仅含自写的 ``## sheet`` 标题）——切分器据此以
+      sheet 为章节边界，切片后由 ``clean_chunks`` 剥掉前缀（见 ``_MARKDOWN_EXTS``）。
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    out: list[str] = []
+    for ws in wb.worksheets:
+        out.append(f"## {ws.title}")
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if v is None else str(v).strip() for v in row]
+            if not any(cells):
+                continue
+            out.append(" | ".join(c for c in cells if c))
+    wb.close()
+    return _normalize("\n".join(out))
 
 
 def _parse_text(path: Path) -> str:
@@ -169,8 +197,11 @@ def _parse_markdown(path: Path) -> str:
     return _normalize("\n".join(out))
 
 
-#: 需要做「切片后清理」的扩展名 —— 只有 markdown 会把标题写成 ``# xxx``。
-_MARKDOWN_EXTS = {".md", ".markdown"}
+#: 需要做「切片后清理」的扩展名 —— 解析产物含 ``#`` 标题前缀的格式。
+#: markdown 的标题是源文件自带的；xlsx 的 ``## sheet`` 标题是解析器自写的
+#: （受控产物，单元格数据不含行首 ``#`` 标记）——两者都在切分后由
+#: ``clean_chunks`` 剥前缀，避免 ``##`` 残留进切片与答案（bugfix-log #41 同款教训）。
+_MARKDOWN_EXTS = {".md", ".markdown", ".xlsx"}
 
 
 def strip_heading_marks(text: str) -> str:
