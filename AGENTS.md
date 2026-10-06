@@ -279,6 +279,11 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 - `frontend/Dockerfile`：node 构建 SPA → nginx 托管并反代 `/api`
 - `docker-compose.yml`：`web` + `api` + `db(pgvector/pgvector:pg17)`；默认
   `VECTOR_STORE=pgvector`（元数据与向量共库，不再是 SQLite + ChromaDB）+ `RAG_PROVIDER=mock`
+- **本机端口备注（2026-10-06）**：host 8080 已被本机另一套 compose 项目
+  （`frappe_docker`/ERPNext，其配置绑定 8080 且自动重启）占用，本项目 web 起在
+  **18080**：`WEB_PORT=18080 docker compose up -d --wait`。仓库默认仍是 8080
+  （干净机器无需覆盖）。构建慢可加
+  `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
 - **易踩的两个点**：①健康检查端点是 `/health`，**不带** `/api` 前缀，nginx 里需单独配 location；
   ②前端 axios `baseURL` 是相对路径 `/api`，走同源反代即可，后端**没有也不需要** CORS 配置
 - SSE 流式问答在 nginx 里必须 `proxy_buffering off`，否则答案会被缓冲到最后一次性吐出
@@ -290,7 +295,7 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 
 | | 本地开发（默认在用） | Docker 交付 |
 |---|---|---|
-| 前端 | `5173`（`npm run dev`） | `8080`（nginx，`${WEB_PORT:-8080}:80`） |
+| 前端 | `5173`（`npm run dev`） | `8080`（compose 默认；**本机被 frappe 占用，实际 `18080`**，见容器化节备注） |
 | 后端 | `8000`（uvicorn） | 容器内 8000，**不映射到宿主** |
 | 元数据 | `data/rag.db`（SQLite） | 容器内 PostgreSQL |
 | 向量库 | ChromaDB | PostgreSQL + pgvector（元数据与向量共库） |
