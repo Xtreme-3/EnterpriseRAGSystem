@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response, upload_raw, wait_document
 
 
 def _pg_reachable() -> bool:
@@ -66,11 +67,12 @@ def _cleanup():
 # ---- helpers ----
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes, content_type: str = "text/plain"):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), content_type)},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：接口本身只回 202 pending）。
+
+    需要断言"上传那一刻是 202/pending"的用例请直接用 ``upload_raw``，
+    见 ``test_upload_txt``。
+    """
+    return upload_and_wait_response(client, kb_id, token, filename, content, content_type)
 
 
 # ---- B4-1: 文档上传 ----
@@ -80,14 +82,26 @@ def test_upload_txt(client: TestClient) -> None:
     kb_id = _create_kb(client, token, "test_b4_kb")
 
     content = "This is a test document with some content for vectorization.".encode("utf-8")
-    resp = _upload(client, kb_id, token, "readme.txt", content)
-    assert resp.status_code == 201
+
+    # K4 契约：上传**立即 202 + pending**，向量化交给后台（这是本积木的核心行为，
+    # 用 upload_raw 拿原始响应，不走"等到终态"的辅助函数）
+    resp = upload_raw(client, kb_id, token, "readme.txt", content)
+    assert resp.status_code == 202
     body = resp.json()
     assert body["filename"] == "readme.txt"
     assert body["file_type"] == "txt"
-    assert body["status"] == "indexed"
-    assert body["chunk_count"] >= 1
+    assert body["status"] == "pending"
+    assert body["chunk_count"] == 0
     assert body["error"] is None
+    assert body["job"]["stage"] == "pending"
+    assert body["job"]["total_units"] == 0  # chunking 完成后才回填
+
+    # 后台跑完后转终态
+    final = wait_document(client, body["id"], token)
+    assert final["status"] == "indexed"
+    assert final["chunk_count"] >= 1
+    assert final["error"] is None
+    assert final["job"]["stage"] == "done"
 
 
 def test_upload_md(client: TestClient) -> None:
@@ -96,7 +110,6 @@ def test_upload_md(client: TestClient) -> None:
 
     md_content = "# 标题\n\n## 章节一\n\n这是第一段内容。\n\n## 章节二\n\n这是第二段内容。".encode("utf-8")
     resp = _upload(client, kb_id, token, "doc.md", md_content, "text/markdown")
-    assert resp.status_code == 201
     assert resp.json()["file_type"] == "md"
     assert resp.json()["status"] == "indexed"
 

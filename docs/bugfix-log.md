@@ -1254,3 +1254,119 @@ docker compose build && docker compose up -d --wait
 **怎么发现的**：G6 数据看板的真数据验收——demo 登录 401 是第一现场。
 教训：凡是"从配置读来的相对路径"，都必须问一句**"相对谁"**——答案应该是代码里
 锚定的基准，而不是启动命令的心情。
+
+---
+
+## 45. 🔴 K4：清残留向量写在了 `ensure_collection` 之前 → 全新库上必崩
+
+**症状**：`relation "vectors" does not exist`。**只在全新（从没建过向量表）的
+pgvector 库上出现**，本地跑了两个月的 chroma 路径完全正常，所以 K4 开发期间一路绿灯。
+
+**根因**：为 K4 的「重试」写 `_index()` 时，顺序是
+
+```python
+self.vector_store.delete_document(kb_id, doc_id)      # 先清重试残留
+self.vector_store.ensure_collection(kb_id, dim)       # 再确保集合存在
+```
+
+想的是"先清干净再写"。但 pgvector 的 `vectors` 表是**惰性建的** ——
+它由 `ensure_collection()` → `_ensure_ext()` 建出。全新库上第一次 `delete_document`
+直接对着不存在的表发 `DELETE`，当场炸。
+
+**为什么 chroma 上永远看不出来**：chroma 的 `delete` 会顺手把集合建出来，
+所以这个顺序在本地默认路径下**行为正确**。这是典型的"两条存储实现语义不同、
+只在其中一条上暴露"的坑。
+
+**修复**：把 `ensure_collection` 提到 `delete_document` 之前，并把顺序约束写进
+`_index` 的 docstring（不然下一个人很容易"顺手整理"回原来的顺序）。
+
+**怎么发现的**：不是本地跑出来的 —— 是**把 PG-gated 那批用例第一次真正跑起来**
+（`VECTOR_STORE=pgvector` + 临时 PG 容器）才照出来的。`tests/test_pgvector_store.py`
+在 PG 不可达时整模块 skip，pgvector 这条代码路径在本机**从未被执行**过。
+同一个教训在 #43 已经写过一次（DSN 不写驱动），这是第二次。
+
+**顺带硬化的同类风险**（见 #47）：`CREATE TABLE IF NOT EXISTS` 在维度变化时静默
+不生效，症状与本案一样是"表结构没跟上配置，报错却在别处"。
+
+---
+
+## 46. 🔴 测试夹具作用域过小 → PG-gated 用例静默跑在**真实模型**上
+
+**症状**：把 PG-gated 那批用例第一次真跑起来，**11 个失败**，且失败信息五花八门：
+
+- `DataError: expected 1024 dimensions, not 64`（测试按 mock 的 64 维造向量）
+- `rewritten_query` 期望拼接式兜底 `"A · B"`，实得 `"差旅报销的住宿标准是什么？"`
+- `active_count` 期望 1 实得 2（检索把两份文档都召回了）
+
+**根因**：`tests/conftest.py` 里钉死 mock 供应商的夹具是**函数级**的：
+
+```python
+@pytest.fixture(autouse=True)                      # ← 默认 function scope
+def _pin_offline_providers(monkeypatch): ...
+```
+
+而一批 PG-gated 用例用的是**模块级** `client`。pytest 按作用域**从大到小**建夹具，
+所以 `TestClient(app)` 先跑，它在 `app.main` 的 lifespan 里就把管线建好了
+（`build_llm()` / `build_embedding()` 此时读 `Settings()`），**函数级的 setenv 还没执行**
+→ 管线绑的是 `.env` 里的真实供应商：`RAG_PROVIDER=dashscope`（中转站）+ 百炼
+`qwen3.7-text-embedding`（1024 维）。
+
+后果有三层，一层比一层贵：**①出网** —— 单测真实消耗百炼额度；**②不可重复** ——
+结果随本机 `.env` 漂移；**③断言静默失效** —— 那些按 mock 语义写的断言全部落空。
+
+**为什么没人发现**：这批用例**只在 PG 可达时才跑**，而本机平时 PG 不可达 →
+整模块 skip。夹具作用域这个缺陷被"skip"完美遮住了两个月。
+
+**修复**：夹具改成 `scope="session"`，用 `pytest.MonkeyPatch()` 实例（`monkeypatch`
+夹具本身是函数级、不能在 session 夹具里用），结束 `undo()`。session 级在所有模块级
+夹具之前执行，于是管线构建时环境已经钉住。
+
+**注意没改语义**：`LLM_PROVIDER` / `RERANK_PROVIDER` 仍钉**空串**而非 `mock`。
+`tests/test_rerank.py` 有几条用例靠 `llm_provider or rag_provider` 的兜底链解析到
+dashscope，钉成 `mock` 会让兜底链第一步就命中、这些用例**静默失去覆盖**。
+它显式传 `rag_provider="dashscope"`，而 pydantic-settings 里显式传参优先于环境变量，
+所以不受影响。
+
+**修完结果**：94 passed / 0 failed（原 11 failed）。
+
+**教训**：`autouse=True` 的"环境钉死"类夹具，**作用域要按最粗粒度的被保护对象选**，
+而不是按默认值。凡是测试里有模块级/会话级的重型夹具（`TestClient`、engine、连接池），
+函数级的环境夹具一律来不及。这条与 #43 是同一个母题：**默认会 skip 的用例 ≈ 没有用例**。
+
+---
+
+## 47. ⚠️ 向量表维度变化静默失效 → 报错在几十层栈之外
+
+**症状**：换 embedding 供应商后写入抛
+`DataError: (psycopg2.errors.DataException) expected 1024 dimensions, not 64`，
+栈底完全看不出是"表结构没跟上配置"。
+
+**根因**：`embedding vector({dim})` 的维度只在**建表**时确定，而
+
+```sql
+CREATE TABLE IF NOT EXISTS vectors (... embedding vector(1024) ...)
+```
+
+遇到已存在的表（比如上一轮用 64 维建的）**直接跳过，一句警告都没有**。
+于是表里还是旧维度，错误被推迟到第一次写入时才以 SQLAlchemy 的 DataError 冒出来。
+
+**这是本项目的现实场景，不是假想**：Docker 交付跑 mock（64 维）、本地开发跑百炼
+（1024 维），两条路径本来就来回切。我自己就在跑 K4 的 PG-gated 回归时被绊了整整一轮 ——
+20 个用例集体变红、检索全部返回空，第一眼看像"K4 把检索改坏了"。
+
+**修复**：`_ensure_ext` 在 `CREATE TABLE IF NOT EXISTS` **之前**调用新增的
+`_reconcile_dim()`，用 `format_type(atttypid, atttypmod)` 读出实际维度（返回
+`vector(64)` 这样的字符串，比直接解析 `atttypmod` 可靠），然后分两种处置：
+
+- **空表 → 自动 `DROP TABLE` 重建**（换维度没有数据要保，重建是唯一正确解，
+  也不该逼用户手工敲 DDL）；
+- **非空表 → 抛 `RuntimeError`**，报清「表内维度 / 当前维度 / 涉及行数 / 两条处置路径」。
+  **绝不自动 drop** —— 静默毁掉已灌进的语料是不可接受的破坏性动作。
+
+**顺带修正的一处歧义**：原来只在 `_ensure_ext` 里 `CREATE TABLE IF NOT EXISTS`，
+没有任何地方能告诉你"表是按哪个维度建的"。现在这个信息在启动时就会以 warning 或
+异常的形式直接说出来。
+
+**测试**：`tests/test_pgvector_dim_guard.py`（5 例，**离线**、用桩连接）。
+刻意不做成 PG-gated —— 要验的是"看到什么维度就做什么决定"，与 PostgreSQL 无关；
+放成 PG-gated 只会让这条护栏在 CI（无 PG）里**永不生效**，那正是 #43 / #46 的同一个坑。

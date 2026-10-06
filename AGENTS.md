@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（443 用例）；前端 vitest + jsdom + @vue/test-utils（58 用例）
+- **测试**：后端 pytest + httpx + TestClient（462 用例）；前端 vitest + jsdom + @vue/test-utils（63 用例）
 
 ## 目录结构
 
@@ -245,6 +245,15 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - 可选：PostgreSQL 17 + pgvector（Docker 镜像 `pgvector/pgvector:pg17`）
 - 密码哈希：bcrypt，**哈希前截断到 72 字节**
 - pgvector 建表用幂等模式：`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，兼容旧库
+- ⚠️ **`create_all()` 不会给已存在的表加列**，而 SQLite 分支没有迁移路径
+  （踩过两次：`knowledge_bases has no column named user_id`、`documents` 加列同理）。
+  所以**给已有模型加字段 = 同时要写一个"缺列则 ALTER"的轻量迁移**；
+  能让新数据独立成表时就独立成表（`conversations` / `chat_messages` / `message_feedback` /
+  `query_cache` / `ingestion_jobs` 都是这么做的），零迁移痛苦。
+- ⚠️ **pgvector 的 `vectors` 表维度是建表时固化的**。Docker 交付跑 mock（64 维）、
+  本地开发跑百炼（1024 维），两条路径切换时表结构不会自动跟上 ——
+  `CREATE TABLE IF NOT EXISTS` 会静默跳过。`_ensure_ext` 里的 `_reconcile_dim`
+  负责这道护栏：空表自动重建、非空表报错（**绝不静默 drop**）。见 bugfix #47。
 
 ## 测试
 
@@ -252,10 +261,24 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - `tests/conftest.py` 把 `RAG_PROVIDER` / `EMBEDDING_PROVIDER` 钉成 `mock`、`RERANK=false`，
   保证测试**不读本机 `.env`、不出网、可重复**；`LLM_PROVIDER` / `RERANK_PROVIDER` 钉成**空串**
   （不设成 mock，否则 `test_rerank.py` 里验证真实装配的用例会静默失去覆盖）
+- ⚠️ **这条钉死的夹具是 `scope="session"` 的，别改回函数级**。一批 PG-gated 用例用的是
+  **模块级** `client`，而 pytest 按作用域从大到小建夹具 —— 函数级的环境 setenv 会在
+  `TestClient(app)` 进 lifespan 建管线**之后**才执行，管线于是绑上 `.env` 里的真实供应商
+  （出网、烧额度、按 mock 语义写的断言全落空）。见 bugfix #46。
 - pgvector 相关用例单独标记，连不上自动跳过
+  - ⚠️ **要真跑这批必须 `VECTOR_STORE=pgvector` + 起 PG + 隔离 `DATA_DIR`**（如
+    `DATA_DIR=.pytest-tmp/pgdata`）。它们的闸门只看 PG 可达性，若照着本机 `.env`
+    的 `VECTOR_STORE=chroma` 跑，应用写 SQLite 而 `_cleanup` 去 PG 删 `knowledge_bases` ——
+    两边不一致，且会污染真实开发库。**换 embedding 维度后要先 `DROP TABLE vectors`**（见 bugfix #47）
+  - 另有一批「看着像 PG-gated、其实没有闸门」的纯离线用例（`test_singleton` /
+    `test_feedback` / `test_dashboard`）—— 别把它们塞进 pgvector 批次
 - 统一用 `TestClient(app, raise_server_exceptions=False)`
 - 清理测试数据走原生 psycopg2（规避 Python 3.13 上 SQLAlchemy immutabledict 的问题）
-- **前端**：`cd frontend && npm test`（vitest + jsdom，58 用例）。约定见上文「前端测试（K9）」
+- **异步摄取（K4）的用例统一走 `tests/ingest_helpers.py`**：`wait_document`（轮询到终态）、
+  `upload_raw`（只发请求，用于断言 202/pending）、`upload_and_wait`（返回文档 JSON，严格断言 202）、
+  `upload_and_wait_response`（返回终态 GET 响应；**非 202 原样透传**）。
+  别再各自写 `_upload()` 本地封装 —— 已经因为漏改断言连炸过两轮
+- **前端**：`cd frontend && npm test`（vitest + jsdom，63 用例）。约定见上文「前端测试（K9）」
 - **junit 输出必须落到仓库内**（如 `.pytest-tmp/junit.xml`）：`/tmp` 在 Git Bash 与 Windows Python
   下不是同一个路径（实际落到 `D:\tmp`），写在 `/tmp` 会找不到文件
 - **看结果以 junit XML 的计数为准**：根节点是 `<testsuites>` 包装，`root.get('tests')` 返回 `None`，
@@ -339,6 +362,9 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 对话页参数可视化 K7（top_k / rerank 三态 / 模型切换 + `GET /api/config/chat`） | ✅ |
 | 答案反馈闭环 K5（有用/没用 + 原因标签 + `message_feedback` 表 + done 事件带 message_id） | ✅ |
 | 问答缓存 K6（精确 + 语义两级，阈值实测 0.78，kb 级失效，多轮不缓存） | ✅ |
-| K4 摄取异步化（暂缓，触发条件见 docs/roadmap.md 排期决策） | ⬜ |
+| K4 摄取异步化（202→pending + `IngestionJob` 进度表 + `POST /documents/{id}/retry`） | ✅ |
 
-**后端 443 测试全绿**（330 通过 / 113 跳过，跳过项需 PostgreSQL 或真实 API Key）+ **前端 58 测试全绿**。未排期项见 `docs/roadmap.md` 末尾（管理后台、异步摄取队列（K4 暂缓）、向量库可插拔、多模型配置、审计日志、更多格式（PPT/OCR，Excel 已完成 → K10）、RPA 集成）。
+**后端 462 测试全绿**（349 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 63 测试全绿**。
+跳过的那 113 项**并非无用**：它们是 pgvector 路径的唯一覆盖，本地起 PG 后按上文「测试」节的
+三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，本轮实测 94 passed。
+未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、审计日志、更多格式（PPT/OCR，Excel 已完成 → K10）、RPA 集成）。

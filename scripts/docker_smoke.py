@@ -157,6 +157,17 @@ def main() -> int:
     st, raw = call("POST", f"/api/kbs/{kb_id}/documents", token,
                    raw=parts, ctype=f"multipart/form-data; boundary={b}")
     check("POST .../documents", st in (200, 201, 202), f"http={st}")
+    # K4：上传改为异步后**必须**是 202 + pending + job，不能退回同步 201 ——
+    # 只断言"状态码在集合里"会让契约悄悄退化回同步而无人察觉。
+    if st == 202:
+        up = json.loads(raw)
+        check("上传返回 status=pending（K4 异步）", up.get("status") == "pending",
+              f"status={up.get('status')}")
+        check("上传响应带 job 进度对象", isinstance(up.get("job"), dict),
+              f"job={up.get('job')}")
+    else:
+        check("上传返回 202（K4 异步契约）", False,
+              f"http={st} —— 交付镜像可能是 K4 之前的版本")
     doc_id = json.loads(raw).get("id") if st in (200, 201, 202) else None
     if doc_id:
         final = None
@@ -173,6 +184,27 @@ def main() -> int:
               bool(final and final["status"] == "indexed"),
               f"status={final['status'] if final else '超时'} "
               f"chunks={final.get('chunk_count') if final else '?'}")
+        # K4：终态后 job 必须也落终态，且 total_units 与实际切片数一致
+        # （两者不一致意味着进度上报与实际写入脱节）
+        if final and final.get("status") == "indexed":
+            job = final.get("job") or {}
+            check("终态 job.stage=done", job.get("stage") == "done", f"stage={job.get('stage')}")
+            check("job.total_units == chunk_count",
+                  job.get("total_units") == final.get("chunk_count"),
+                  f"{job.get('total_units')} vs {final.get('chunk_count')}")
+
+    print("=== 4b. 重试端点与上传原件留存（K4） ===")
+    if doc_id:
+        # 传一份「已经是 indexed」的文档去重试 → 期望 409（契约：只对 failed 开放）。
+        # 顺带证明该端点存在且鉴权正常 —— 404 说明路由没注册。
+        st, raw = call("POST", f"/api/documents/{doc_id}/retry", token)
+        check("对 indexed 文档 retry → 409", st == 409, f"http={st}")
+        # 原件必须留在服务端（异步重试的前提）。经 API 看不到路径，
+        # 但可以用「删掉再重试」反证：删除后 404 说明路由与鉴权都在。
+        st, _ = call("POST", "/api/documents/999999999/retry", token)
+        check("对不存在的文档 retry → 404", st == 404, f"http={st}")
+        st, _ = call("POST", f"/api/documents/{doc_id}/retry", None)
+        check("无 token retry → 401", st == 401, f"http={st}")
 
     print("=== 5. 非流式问答 ===")
     question = "住宿费一线城市多少钱一晚？"

@@ -102,22 +102,71 @@ IngestionJob:
 
 ## 验收标准（可测试）
 
-- [ ] 上传接口在 mock 模式下立即返回（用超时断言：响应 < 300ms），且 `status == "pending"`
-- [ ] 轮询 `GET /api/documents/{id}`：能看到 `stage` 从 parsing 递进到 done，`status` 最终 `indexed`
-- [ ] `total_units` 在 chunking 完成后 == 实际 `Document.chunk_count`
-- [ ] 失败路径：传一个损坏/空文件 → `status=failed`、`error` 非空、job `stage=failed`
-- [ ] `POST /retry`：failed → 202 且重新跑成功；对 indexed 文档 → 409
-- [ ] 权限：viewer 调 upload/retry → 403；他人 KB → 403
-- [ ] 并发：同时上传 3 个文件，全部成功（执行器上限内排队，不互相覆盖状态）
-- [ ] 重启自愈：手动把某 job 置 `processing` 后重启应用 → 该 job 变 `failed`
-- [ ] 同步 `ingest_file()` 行为与返回结构完全不变（回归）
-- [ ] 现有 **392** 测试全绿（注意：依赖"上传后立即 indexed"的用例需改为轮询等待）
-- [ ] `npm run build` 通过
-- [ ] **batch 调参**（本积木的附赠项，一行改动）：`_EMBED_BATCH` 从 16 提到 embedding API
-      的单次上限（百炼为 25），并附一条实测对比。⚠️ 异步化只让 **UI 不阻塞**、
-      **不减少总时长** —— 这两件事别混在一个数字里归因。砍总时长靠的是减少串行往返次数
-- [ ] `scripts/reingest_sample_docs.py` 仍然可用：上传后轮询到 indexed 再报 `chunk_count`
-      （它现在直接读上传响应的 `chunk_count`，异步化后会静默打印成 `None`）
+> 状态（2026-10-06 收口）：**全部达成**。逐条对应实现与用例见下表括号内。
+> 落地时的三处偏差与三个新发现的缺陷（#45 / #46 / #47）记在 `docs/bugfix-log.md`。
+
+- [x] 上传接口在 mock 模式下立即返回（用超时断言：响应 < 300ms），且 `status == "pending"`
+      （`test_ingest_async.py::test_upload_returns_immediately`，实测 **72ms**）
+- [x] 轮询 `GET /api/documents/{id}`：能看到 `stage` 从 parsing 递进到 done，`status` 最终 `indexed`
+      （`test_stage_advances_through_pipeline`，用慢速 embedding 替身让中间态可观测）
+- [x] `total_units` 在 chunking 完成后 == 实际 `Document.chunk_count`
+- [x] 失败路径：传一个损坏/空文件 → `status=failed`、`error` 非空、job `stage=failed`
+- [x] `POST /retry`：failed → 202 且重新跑成功；对 indexed 文档 → 409
+      （另补：原件已不存在 → 409 且文案说明"请删除后重新上传"；viewer / 他人库 → 403）
+- [x] 权限：viewer 调 upload/retry → 403；他人 KB → 403
+- [x] 并发：同时上传 3 个文件，全部成功（执行器上限内排队，不互相覆盖状态）
+- [x] 重启自愈：手动把某 job 置 `processing` 后重启应用 → 该 job 变 `failed`
+- [x] 同步 `ingest_file()` 行为与返回结构完全不变（回归）
+- [x] 现有测试全绿 —— **448 collected / 0 failed / 113 skipped**（原 443）
+- [x] `npm run build` 通过（`vue-tsc --noEmit` 真实退出码 0、`vite build` exit 0；前端 58 → **63**）
+- [x] **batch 调参**：`_EMBED_BATCH` 16 → 25，**实测对比见
+      `test_embed_round_trips_shrink_with_larger_batch`** —— 400 切片文档从 **25 次往返降到 16 次**（−36%）。
+      ⚠️ 异步化只让 **UI 不阻塞**、**不减少总时长** —— 这两件事没混在一个数字里归因
+- [x] `scripts/reingest_sample_docs.py` 上传后轮询到 indexed 再报 `chunk_count`
+      （新增 `_wait_indexed()`，超时 180s —— 真模型下一份大 PDF 慢是正常的，早退会把"还在跑"误报成"失败"）
+
+### 收口时新增的验收项（未在原卡片内）
+
+- [x] `data/uploads` 在 Docker 交付中持久化（`docker-compose.yml` 加 `uploads` 具名卷）。
+      不加卷时容器一重建原件就没了，retry 会一律回 409 —— 本地开发看不出来，只有重建容器才暴露
+- [x] 向量表维度护栏：换 embedding 供应商后表维度不符时，空表自动重建、非空表**报错而非静默失效**（bugfix #47）
+- [x] 测试夹具作用域修正：PG-gated 用例此前静默跑在**真实模型**上（bugfix #46）
+
+## 落地偏差（事后补记，2026-10-06）
+
+实现时与原设计有四处出入，都是**碰到具体约束后改的**，不是随手简化：
+
+1. **`stage` 多一个 `pending`**。原设计的第一阶段是 `parsing`，但执行器
+   `max_workers=2` 时上传与真正开跑之间有真实排队窗口 —— 不表达这个状态就没法区分
+   "排队中"与"解析中"，前端只能让进度条干等着。故补 `pending`
+   （`INGEST_STAGES` / `TERMINAL_STAGES` 两个常量集中在 `models.py`）。
+
+2. **`ingest_file_async(kb_id, path, display_name)` 拆成三步**：
+   `create_pending()` → `save_upload()` → `enqueue()`。原因见下方"重试需要原始文件" ——
+   原设计只传 `path`，而重试时**根本没有 path 可传**（原上传经
+   `tempfile.NamedTemporaryFile(delete=False)` 且请求一结束就删）。
+   顺序不能换：先落库拿到 doc_id，才能按 `doc_id` 推导出确定的原件路径。
+
+3. **没用 `embed_iter(texts) -> Iterator`**。改为在 pipeline 侧按
+   `provider.max_batch` 分批（`_embed_with_progress`）。给 provider 加迭代器方法意味着
+   **批次值要在两处各写一份**（provider 内部循环 + pipeline 上报进度），必然漂移；
+   把上限提到 `EmbeddingProvider.max_batch` 属性上，两边共用同一个数。
+   代价是 `max_batch` 必须是**非抽象属性**（默认 16），否则所有测试替身都要跟着改。
+
+4. **`IngestionJob` 加 `user_id`**（原设计没有）。权限校验与"这个任务是谁提交的"都需要，
+   且加列比重建表便宜。
+
+**契约变更影响面：卡片估的"6 个测试文件 15 处"偏小，实际约 15 个文件。**
+原因是每个测试文件都有自己的 `_upload()` 本地封装，都要改成"上传 → 轮询至终态"，
+而不是只有那 15 处断言。为此统一封装成 `tests/ingest_helpers.py`，四个入口各司其职：
+`wait_document`（轮询到终态）、`upload_raw`（只发请求，给要断言 202/pending 的用例）、
+`upload_and_wait`（返回文档 JSON，严格断言 202）、
+`upload_and_wait_response`（返回终态 GET 响应；**非 202 原样透传** ——
+403/404/400 这类在请求期就被拒，没有后台任务可等，无条件断言 202 会把它们全判红）。
+
+**顺带发现：那张影响表里列的 `test_pipeline` / `test_answer_quality` /
+`test_semantic_chunker` 其实不用改** —— 它们用同步的 `ingest_file()`，而本积木刻意保留了
+同步路径不动。真正要改的是**走 HTTP 上传**的那些用例。
 
 ## 依赖
 
@@ -143,7 +192,7 @@ IngestionJob:
   | 6 个测试文件共 **15 处**断言 `"indexed"` | 上传后立即断言 | 轮询至 indexed |
   | `frontend/src/views/DocList.vue` | 上传后直接刷新列表 | 加轮询 + 进度列 |
   | `scripts/reingest_sample_docs.py:272` | 直接读响应的 `chunk_count` | 轮询到 indexed 再读 |
-  | 本卡片 | 原写"226 测试全绿" | 已更新为 392 |
+  | 本卡片 | 原写"226 测试全绿" | 已更新为 **448**（见上方"落地偏差"）
 
   涉及文件：`test_documents` / `test_pipeline` / `test_diagnostics` /
   `test_doc_health` / `test_answer_quality` / `test_semantic_chunker`。

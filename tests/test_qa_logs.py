@@ -1,13 +1,13 @@
 """G4：问答日志埋点 + 历史查询测试。依赖 PostgreSQL + mock provider。"""
 from __future__ import annotations
 
-import io
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 
 
 def _pg_reachable() -> bool:
@@ -34,11 +34,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 def _ask(client: TestClient, kb_id: int, token: str, query: str):
@@ -101,7 +98,9 @@ def test_ask_then_log_exists(client: TestClient) -> None:
     kb_id = _create_kb(client, token, "test_g4_log_kb")
     upload = _upload(client, kb_id, token, "policy.txt",
                      "出差住宿标准：一线城市每晚不超过六百元。".encode("utf-8"))
-    assert upload.status_code == 201
+    # _upload 返回的是**终态那次 GET**（K4 上传接口只回 202，没有终态信息可断）
+    assert upload.status_code == 200
+    assert upload.json()["status"] == "indexed"
     doc_id = upload.json()["id"]
 
     ask = _ask(client, kb_id, token, "出差住宿标准是什么")

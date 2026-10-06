@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -91,6 +92,47 @@ def _content_type(path: Path) -> str:
     if ext not in CONTENT_TYPES:
         raise SystemExit(f"不支持的扩展名 {ext}（{path.name}）；可用：{', '.join(sorted(CONTENT_TYPES))}")
     return CONTENT_TYPES[ext]
+
+
+def _wait_indexed(
+    client: httpx.Client,
+    headers: dict,
+    doc_id: int,
+    timeout: float = 180.0,
+    interval: float = 1.0,
+) -> dict | None:
+    """轮询单份文档直到终态（K4）。
+
+    成功返回该文档的 JSON（含 ``chunk_count``）；失败或超时返回 ``None``，
+    并把原因打到终端 —— 调用方据此计入 ``failed``。
+
+    超时给到 180s 是**故意宽松**的：真模型下 embedding 走百炼接口，
+    一份 20MB 的 PDF 切片上百条、每条一次外部调用，慢是正常的；
+    这里早退只会把"还没跑完"误报成"失败"。
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while True:
+        resp = client.get(f"/api/documents/{doc_id}", headers=headers)
+        if resp.status_code != 200:
+            print(f"   查询 #{doc_id} 状态失败 HTTP {resp.status_code}: {resp.text}")
+            return None
+        body = resp.json()
+        status = body.get("status")
+        job = body.get("job") or {}
+        stage = job.get("stage")
+        if stage and stage != last:
+            print(f"   #{doc_id} → {stage}")
+            last = stage
+        if status == "indexed":
+            return body
+        if status == "failed":
+            print(f"   #{doc_id} 解析失败：{body.get('error') or '（无错误信息）'}")
+            return None
+        if time.monotonic() > deadline:
+            print(f"   #{doc_id} 等待超时（{timeout:.0f}s，当前状态 {status}）")
+            return None
+        time.sleep(interval)
 
 
 def _collect_files(src: Path, patterns: list[str]) -> list[Path]:
@@ -264,12 +306,21 @@ def main(argv: list[str] | None = None) -> int:
                     headers=headers,
                     files={"file": (f.name, fh, _content_type(f))},
                 )
-            if resp.status_code != 201:
+            # K4 起上传是异步的：202 = 已受理，向量化在后台跑。老版本会返回 201，
+            # 一并接受，这样脚本对新旧后端都能用。
+            if resp.status_code not in (201, 202):
                 failed.append(f.name)
                 print(f"上传 {f.name} 失败 HTTP {resp.status_code}: {resp.text}")
                 continue
-            body = resp.json()
-            print(f"已上传 {f.name} → #{body['id']}，{body.get('chunk_count')} 切片")
+            doc_id = resp.json()["id"]
+            # 异步下响应里还没有 chunk_count（解析都没开始），必须等终态再读，
+            # 否则这里会静默打印 None。
+            body = _wait_indexed(client, headers, doc_id)
+            if body is None:
+                failed.append(f.name)
+                print(f"   #{doc_id} {f.name} 解析失败或超时，跳过")
+                continue
+            print(f"已上传 {f.name} → #{doc_id}，{body.get('chunk_count')} 切片")
 
         final = client.get(f"/api/kbs/{kb_id}/documents", headers=headers).json()
         total = sum(d.get("chunk_count") or 0 for d in final)

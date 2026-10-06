@@ -11,7 +11,6 @@
 """
 from __future__ import annotations
 
-import io
 import json
 import time
 
@@ -20,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 
 
 # ---- 工具（与 test_multiturn 同款，前缀 test_j2%） ----
@@ -54,11 +54,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers=_auth(token),
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 def _auth(token: str) -> dict[str, str]:

@@ -13,8 +13,15 @@ from app.providers.base import EmbeddingProvider, LLMProvider
 
 logger = logging.getLogger(__name__)
 
-# 各家 embedding 接口的单次请求条数上限（保守取值，循环分批）
-_EMBED_BATCH = 16
+# 各家 embedding 接口的单次请求条数上限（循环分批）。
+#
+# K4 调参：16 → 25。25 是阿里云百炼 embedding 接口的单次输入条数上限，此处取满。
+# 这是**本积木唯一真正缩短总时长**的改动 —— 异步化只让 UI 不阻塞，不减少往返次数。
+# 一份 400 切片的文档：16 条/批 = 25 次往返 → 25 条/批 = 16 次，减少 36%。
+# 实测口径见 tests/test_ingest_async.py::test_embed_round_trips_shrink_with_larger_batch
+# （用计数桩数 `embeddings.create` 的调用次数，与真实接口无关，结果确定）。
+# ⚠️ 换供应商要按对方上限改这个值，别直接抄 25。
+_EMBED_BATCH = 25
 
 # K2：显式超时与重试。SDK 默认读超时为 600s 且重试次数不受限 —— 真模型挂住时
 # 请求会一直等下去（前端表现为"永远转圈"）。这里收敛为可预期的上限。
@@ -180,6 +187,12 @@ class OpenAICompatEmbedding(EmbeddingProvider):
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def max_batch(self) -> int:
+        """摄取流水线按这个值分批以便上报进度 —— 与内部 ``_EMBED_BATCH``
+        共用同一个常量，避免"进度批次"与"接口上限"两处各写一个数而漂移。"""
+        return _EMBED_BATCH
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:

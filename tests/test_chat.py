@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import io
 import json
 
 import pytest
@@ -12,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 
 
 def _pg_reachable() -> bool:
@@ -38,11 +38,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 @pytest.fixture(scope="module")

@@ -5,11 +5,16 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
 from pgvector import Vector as PgVector
 
 from app.config import Settings, get_settings
 from app.rag.hybrid import tokenize
 from app.storage.vector_store import ChunkToIndex, ScoredChunk, VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class PgVectorStore(VectorStore):
@@ -48,6 +53,46 @@ class PgVectorStore(VectorStore):
             )
         return self._engine
 
+    def _reconcile_dim(self, conn, dim: int) -> None:
+        """让已存在的向量表维度与当前 embedding 一致（否则写入必失败）。
+
+        背景：``embedding vector({dim})`` 的维度只在**建表**时确定，
+        ``CREATE TABLE IF NOT EXISTS`` 遇到已存在的表会直接跳过 —— 于是换供应商
+        （本项目的现实场景：Docker 交付用 mock 64 维、本地开发用百炼 1024 维）
+        时表里还是旧维度，表现为一次写入抛
+        ``DataError: expected 1024 dimensions, not 64``，
+        而栈底那行完全看不出是"表结构没跟上配置"。
+
+        处置分两种：**空表直接重建**（换维度没有任何数据要保，重建是唯一正确解，
+        也不该让用户手工去敲 DDL）；**非空表报错**，因为自动 drop 会静默毁掉
+        已灌进的语料 —— 这种破坏性动作必须由人决定。
+        """
+        existing = conn.exec_driver_sql(
+            "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
+            f"WHERE attrelid = to_regclass('{self.TABLE}') "
+            "AND attname = 'embedding' AND NOT attisdropped"
+        ).scalar()
+        if not existing:  # 表还不存在 —— 正常首启路径
+            return
+        match = re.search(r"\((\d+)\)", existing)
+        if not match or int(match.group(1)) == dim:
+            return
+
+        old_dim = int(match.group(1))
+        rows = conn.exec_driver_sql(f"SELECT count(*) FROM {self.TABLE}").scalar() or 0
+        if rows:
+            raise RuntimeError(
+                f"向量表 {self.TABLE} 的维度是 {old_dim}，而当前 embedding 输出 {dim} 维，"
+                f"且表内已有 {rows} 行数据。\n"
+                f"  · 若确实要换 embedding：先清掉旧向量（DROP TABLE {self.TABLE};）后重新摄取全部文档；\n"
+                f"  · 若只是临时切了供应商：把 EMBEDDING_PROVIDER / EMBEDDING_DIM 改回建表时的配置。\n"
+                f"（本表不做自动重建，避免静默丢弃已有语料。）"
+            )
+        logger.warning(
+            "向量表 %s 维度由 %s 改为 %s：表内无数据，自动重建", self.TABLE, old_dim, dim
+        )
+        conn.exec_driver_sql(f"DROP TABLE {self.TABLE}")
+
     def _ensure_ext(self, dim: int) -> None:
         """确保 pgvector 扩展、向量表与类型适配器就绪（幂等，仅首次执行）。"""
         if PgVectorStore._table_ready:
@@ -58,6 +103,10 @@ class PgVectorStore(VectorStore):
         with self.engine.connect() as conn:
             conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
             pgvector.psycopg2.register_vector(conn.connection.driver_connection, globally=True)
+            # 必须在 CREATE TABLE IF NOT EXISTS **之前**：维度不符的老表若不先处理掉，
+            # CREATE 会静默什么都不做，错误要拖到写入时才以一句
+            # `expected 1024 dimensions, not 64` 从 SQLAlchemy 栈底冒出来。
+            self._reconcile_dim(conn, dim)
             conn.exec_driver_sql(
                 f"""
                 CREATE TABLE IF NOT EXISTS {self.TABLE} (

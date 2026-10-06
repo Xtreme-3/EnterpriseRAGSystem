@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,6 +22,7 @@ from app.config import Settings
 from app.main import app
 from app.providers.base import EmbeddingProvider, LLMProvider, RerankProvider
 from app.rag.pipeline import RagPipeline
+from tests.ingest_helpers import upload_and_wait
 from app.rag.query_cache import normalize_query
 from app.storage.db import init_db
 from app.storage.vector_store import ChunkToIndex, ScoredChunk, VectorStore
@@ -359,12 +359,10 @@ def _kb_with_doc(client: TestClient, username: str) -> tuple[str, int]:
     kb_id = client.post(
         "/api/kbs", json={"name": f"test_{username}_kb"}, headers=_auth(token)
     ).json()["id"]
-    resp = client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": ("policy.txt", io.BytesIO("出差住宿标准：一线城市每晚不超过六百元。".encode()), "text/plain")},
-        headers=_auth(token),
+    # K4：上传改成异步（202）—— 不等摄取收敛就提问会检索不到任何内容
+    upload_and_wait(
+        client, kb_id, token, "policy.txt", "出差住宿标准：一线城市每晚不超过六百元。".encode("utf-8")
     )
-    assert resp.status_code == 201, resp.text
     return token, kb_id
 
 

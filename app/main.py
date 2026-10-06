@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
     构造失败即启动失败 —— 早暴露，避免带病启动。默认 mock + chroma 路径
     在无 API Key、无 PostgreSQL 时也能正常启动（engine 是惰性的）。
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     settings = get_settings()
     _, session_factory = init_db(settings)
     app.state.settings = settings
@@ -60,7 +62,7 @@ async def lifespan(app: FastAPI):
     vector_store = build_vector_store(settings)
     embedding = build_embedding(settings)
 
-    app.state.rag = RagPipeline(
+    rag = RagPipeline(
         settings=settings,
         session_factory=session_factory,
         vector_store=vector_store,
@@ -68,15 +70,40 @@ async def lifespan(app: FastAPI):
         llm=build_llm(settings),
         reranker=build_reranker(settings),
     )
-    app.state.ingestion = IngestionPipeline(
+    app.state.rag = rag
+
+    # K4：后台摄取执行器。选 ThreadPoolExecutor 而不是 FastAPI BackgroundTasks ——
+    # 前者能设**并发上限**（后者每个请求各起一个，同时上传 10 份就会把 embedding
+    # 接口打爆，反而全线变慢），也能在退出时统一收尾。
+    executor = ThreadPoolExecutor(
+        max_workers=settings.ingest_workers, thread_name_prefix="ingest"
+    )
+    app.state.ingestion_executor = executor
+
+    ingestion = IngestionPipeline(
         settings=settings,
         session_factory=session_factory,
         vector_store=vector_store,
         embedding=embedding,
+        executor=executor,
+        # K6 联动：语料变更（job 落终态）才失效问答缓存，不是上传那一刻
+        on_corpus_changed=rag.cache.invalidate_kb,
     )
+    app.state.ingestion = ingestion
+
+    # K4 启动自愈：执行器随进程消失，上次停机时卡住的 job 永远不会再被推进 ——
+    # 显式置 failed，否则前端一直转圈且没有任何出口。
+    stale = ingestion.fail_stale_jobs()
+    if stale:
+        logger.warning("启动自愈：%s 个摄取任务在上次停机时未完成，已置为 failed", stale)
 
     logger.info("数据库就绪（vector_store=%s）；RAG 管线已装配一次", settings.vector_store)
-    yield
+    try:
+        yield
+    finally:
+        # 等正在跑的摄取收尾再释放线程：不等的话，测试里线程会跨用例泄漏，
+        # 生产里重启会把任务腰斩在写向量的中途（留下半截数据）。
+        executor.shutdown(wait=True)
 
 
 app = FastAPI(

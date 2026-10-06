@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 120
     top_k: int = 5
+
+    # ---- K4 摄取异步化 ----
+    # 后台摄取线程数。设成 2 是**有意偏低**：真模型下瓶颈在 embedding 接口的
+    # 速率限制，并发开大只会让每个任务都变慢并触发限流；而 UI 已经不阻塞了，
+    # 排队对用户是可接受的。要同时灌大量文档时再调大。
+    ingest_workers: int = 2
     # 余弦相似度命中阈值：低于此值的切片视为无关，不计入命中来源/日志统计
     # （真实 embedding 对无关文本常有小正分，0 阈值会让噪声污染质检/溯源/问答日志）
     #

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from app.main import app
+from tests.ingest_helpers import auth, upload_and_wait
 
 
 @pytest.fixture()
@@ -50,13 +51,15 @@ def test_upload_xlsx_ingests_end_to_end(client, tmp_path):
     _make_xlsx(xlsx, sheets={
         "差旅标准": [["城市", "住宿上限"], ["一线城市", 600], ["二线城市", 450]],
     })
-    resp = client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": ("standards.xlsx", open(xlsx, "rb"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        headers=_auth(token),
+    # K4：上传异步化，等终态再断言；顺带把原来没关的文件句柄改成 read_bytes()
+    body = upload_and_wait(
+        client,
+        kb_id,
+        token,
+        "standards.xlsx",
+        xlsx.read_bytes(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
     assert body["status"] == "indexed"
     assert body["chunk_count"] >= 1
 

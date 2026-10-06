@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 from app.providers.factory import build_embedding, build_llm, build_reranker
 from app.rag.generator import Generator
 from app.rag.pipeline import RagPipeline
@@ -322,11 +322,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 def _auth(token: str) -> dict[str, str]:

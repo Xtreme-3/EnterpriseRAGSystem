@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import io
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from app.providers.base import LLMProvider, RerankProvider
 from app.providers.mock import MockEmbedding, MockLLM
 from app.providers.openai_compat import OpenAICompatLLM
 from app.rag.pipeline import RagPipeline
+from tests.ingest_helpers import upload_and_wait_response
 from app.storage.db import init_db
 from app.storage.vector_store import ChunkToIndex, ScoredChunk, VectorStore
 
@@ -139,10 +139,9 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: str):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content.encode("utf-8")), "text/plain")},
-        headers=_auth(token),
+    """上传并等到摄取终态，返回**终态响应**（K4：上传接口本身只回 202 pending）。"""
+    return upload_and_wait_response(
+        client, kb_id, token, filename, content.encode("utf-8")
     )
 
 
@@ -156,7 +155,7 @@ def _kb_with_3_chunk_doc(client: TestClient, username: str) -> tuple[str, int]:
     )
     content = "\n\n".join(part.format(i=i) for i in (1, 2, 3))
     resp = _upload(client, kb_id, token, "policy.txt", content)
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 200, resp.text
     assert resp.json()["chunk_count"] == 3  # 三段各 ~750 字，恰好 3 块
     return token, kb_id
 

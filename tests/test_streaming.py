@@ -25,6 +25,7 @@ from app.rag.generator import NO_HIT_ANSWER, Generator
 from app.rag.pipeline import RagPipeline
 from app.storage.db import init_db
 from app.storage.vector_store import ChunkToIndex, ScoredChunk, VectorStore
+from tests.ingest_helpers import upload_and_wait
 
 # ---------------------------------------------------------------- 测试替身
 
@@ -350,12 +351,10 @@ def _setup_kb(client: TestClient, token: str) -> int:
     kb_id = client.post(
         "/api/kbs", json={"name": "test_k1_kb"}, headers=_auth(token)
     ).json()["id"]
-    client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": ("policy.txt",
-                        "出差住宿标准：一线城市每晚不超过六百元，其他城市不超过四百元。".encode("utf-8"),
-                        "text/plain")},
-        headers=_auth(token),
+    # K4：上传异步化 —— 不等摄取收敛就提问，`sources` 事件会空掉
+    upload_and_wait(
+        client, kb_id, token, "policy.txt",
+        "出差住宿标准：一线城市每晚不超过六百元，其他城市不超过四百元。".encode("utf-8"),
     )
     return kb_id
 

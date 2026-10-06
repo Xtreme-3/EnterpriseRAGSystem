@@ -14,6 +14,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.ingest_helpers import upload_and_wait
+
 
 # ---------------------------------------------------------------- 装配计数环境
 
@@ -81,16 +83,13 @@ def _create_kb(client: TestClient, token: str, name: str = "k2_kb") -> int:
 
 
 def _upload_policy(client: TestClient, kb_id: int, token: str) -> None:
-    client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={
-            "file": (
-                "policy.txt",
-                "出差住宿标准：一线城市每晚不超过六百元，其他城市不超过四百元。".encode("utf-8"),
-                "text/plain",
-            )
-        },
-        headers=_auth(token),
+    # K4：上传异步化 —— 不等摄取收敛，后面的检索/问答会拿到空结果
+    upload_and_wait(
+        client,
+        kb_id,
+        token,
+        "policy.txt",
+        "出差住宿标准：一线城市每晚不超过六百元，其他城市不超过四百元。".encode("utf-8"),
     )
 
 

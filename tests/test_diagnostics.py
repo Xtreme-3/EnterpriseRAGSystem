@@ -1,13 +1,13 @@
 """G2：摄取诊断 API 测试。依赖 PostgreSQL + mock provider。"""
 from __future__ import annotations
 
-import io
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 
 
 def _pg_reachable() -> bool:
@@ -34,11 +34,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 @pytest.fixture(scope="module")
@@ -131,7 +128,8 @@ def test_diagnostics_with_failed_doc(client: TestClient) -> None:
     kb_id = _create_kb(client, token, "test_g2_fail_kb")
 
     resp = _upload(client, kb_id, token, "blank.txt", b"   \n  \t  ")
-    assert resp.status_code == 201
+    # _upload 返回的是**终态那次 GET**（K4 上传接口只回 202，没有终态信息可断）
+    assert resp.status_code == 200
     assert resp.json()["status"] == "failed"
 
     resp = client.get(
@@ -184,7 +182,8 @@ def test_consistency_missing_index(client: TestClient) -> None:
     kb_id = _create_kb(client, token, "test_g3_miss_kb")
     resp = _upload(client, kb_id, token, "policy.txt",
                    "差旅住宿标准：一线城市每晚不超过六百元。".encode("utf-8"))
-    assert resp.status_code == 201
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "indexed"
     doc_id = resp.json()["id"]
 
     # 模拟漂移：向量库里该文档的向量被删除

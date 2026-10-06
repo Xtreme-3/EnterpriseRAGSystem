@@ -1,13 +1,13 @@
 """G5：文档健康分析测试（死文档 + 命中热力）。依赖 PostgreSQL + mock provider。"""
 from __future__ import annotations
 
-import io
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import upload_and_wait_response
 
 
 def _pg_reachable() -> bool:
@@ -34,11 +34,8 @@ def _create_kb(client: TestClient, token: str, name: str) -> int:
 
 
 def _upload(client: TestClient, kb_id: int, token: str, filename: str, content: bytes):
-    return client.post(
-        f"/api/kbs/{kb_id}/documents",
-        files={"file": (filename, io.BytesIO(content), "text/plain")},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    """上传并等摄取收敛，返回**终态响应**（K4：上传接口只回 202 pending）。"""
+    return upload_and_wait_response(client, kb_id, token, filename, content)
 
 
 def _ask(client: TestClient, kb_id: int, token: str, query: str):
@@ -182,7 +179,8 @@ def test_failed_doc_is_dead_with_error(client: TestClient) -> None:
     token = _register_and_login(client, "test_g5_fail")
     kb_id = _create_kb(client, token, "test_g5_fail_kb")
     upload = _upload(client, kb_id, token, "blank.txt", b"   \n  \t  ")
-    assert upload.status_code == 201
+    # _upload 返回的是**终态那次 GET**（K4 上传接口只回 202，没有终态信息可断）
+    assert upload.status_code == 200
     assert upload.json()["status"] == "failed"
 
     data = client.get(

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
+from tests.ingest_helpers import wait_document
 
 
 def _pg_reachable() -> bool:
@@ -178,8 +179,9 @@ def test_editor_can_manage_docs_not_kb(client: TestClient) -> None:
     viewer = team["viewer"]
     # editor 上传 + 删除文档
     up = _upload(client, kb_id, editor, "policy.txt", "人工智能是计算机科学的一个分支。".encode("utf-8"))
-    assert up.status_code == 201
+    assert up.status_code == 202  # K4：上传立即 202，摄取转后台
     doc_id = up.json()["id"]
+    wait_document(client, doc_id, editor)  # 等摄取收尾再删，别和后台任务抢同一份文档
     assert client.delete(f"/api/documents/{doc_id}", headers=_auth(editor)).status_code == 200
     # viewer 上传仍 403
     assert _upload(client, kb_id, viewer, "y.txt", "x".encode("utf-8")).status_code == 403
@@ -238,7 +240,8 @@ def test_promote_viewer_to_editor_unlocks_write(client: TestClient) -> None:
     assert resp.json()["role"] == "editor"
     # viewer（已升 editor）现在可上传
     up = _upload(client, kb_id, team["viewer"], "promo.txt", "内容".encode("utf-8"))
-    assert up.status_code == 201
+    assert up.status_code == 202  # 已升 editor，上传放行（K4：202 + 后台摄取）
+    wait_document(client, up.json()["id"], team["viewer"])
 
 
 def test_remove_member_revokes_access(client: TestClient) -> None:

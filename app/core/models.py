@@ -116,6 +116,50 @@ class KnowledgeBaseMember(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# 摄取阶段（K4）。顺序即推进顺序；``TERMINAL_STAGES`` 里的两个是终态。
+INGEST_STAGES = ("pending", "parsing", "chunking", "embedding", "indexing", "done", "failed")
+TERMINAL_STAGES = ("done", "failed")
+
+
+class IngestionJob(Base):
+    """摄取任务（K4）：一次上传的进度与阶段，一份文档恒定一行。
+
+    **为什么独立成表而不是给 ``documents`` 加 progress 列**：``create_all()`` 只建
+    新表、**不会给已存在的表加列**，而 SQLite 分支没有迁移路径（本项目踩过
+    ``no column named user_id``）。新表由 ``create_all`` 直接建，零迁移痛苦。
+
+    **重试复用同一行**（不新建 attempt 记录）：``document_id`` 唯一约束保证一份文档
+    只有一个 job，重试时原地重置 ``stage`` / ``done_units`` / ``error`` / ``started_at``。
+    取舍理由：查询与前端取数都只需"这份文档现在怎么样了"，不需要 attempt 历史。
+
+    ``stage`` 取值：pending → parsing → chunking → embedding → indexing → done | failed。
+    终态 = ``done`` / ``failed``（``TERMINAL_STAGES``）。
+    """
+
+    __tablename__ = "ingestion_jobs"
+    __table_args__ = (
+        UniqueConstraint("document_id", name="uq_ingestion_job_document"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    kb_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    stage: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    done_units: Mapped[int] = mapped_column(Integer, default=0)
+    total_units: Mapped[int] = mapped_column(Integer, default=0)  # chunking 完成后回填
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class QaLog(Base):
     """问答日志（G4）：每次问答的成功事实，供历史查询与死文档检测。
 

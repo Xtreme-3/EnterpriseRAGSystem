@@ -4,7 +4,7 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **后端 443 + 前端 58** 个测试用例全绿 · **32** 个 API 端点 · **11** 个前端页面 · **5** 种文档格式 · 全链路可离线运行
+> **后端 462 + 前端 63** 个测试用例全绿 · **35** 个 API 端点 · **11** 个前端页面 · **6** 种文档格式 · 全链路可离线运行
 
 [![CI](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml/badge.svg)](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml)
 
@@ -78,7 +78,8 @@
 | 能力 | 验收动作 | 关键实现 |
 |---|---|---|
 | **多租户知识库隔离** | 内置就有两个库（kb_1 业务制度 / kb_2 人事财务）。在 kb_2 里问一句只在 kb_1 有答案的（如「美国站的退货窗口是多少天？」），应正确拒答而不是串味 | 向量库按库物理隔离（`kb_{id}` 集合），检索按 `kb_id` 过滤 |
-| **文档摄取** | 传 PDF / DOCX / XLSX / MD / TXT，看状态从 pending → processing → indexed | `SUPPORTED_EXTS` 注册表 + 每种格式独立解析器（md 剥语法标记，xlsx 按 sheet 切片） |
+| **文档摄取（异步）** | 传 PDF / DOCX / XLSX / MD / TXT：**点完按钮立刻返回**（不等向量化），列表里出现一行「排队中 → 解析中 → 向量化 3/12 → 写入索引」的实时进度，收敛后变「已索引」 | 上传接口只回 **202 + pending**，重活交 `ThreadPoolExecutor`；`IngestionJob` 表记 `stage`/`done_units`/`total_units`，前端按需轮询（有未收敛文档才开，全部收敛即停） |
+| **失败可重试** | 传一个损坏的 docx → 状态变「失败」、鼠标悬停看得到原因；点「重试」不必删掉重传 | 原件落盘 `data/uploads/{doc_id}.{ext}`（路径由 doc_id 推导，不给 `documents` 加列）；`POST /api/documents/{id}/retry` 复用同一份 job 行 |
 | **三档切片策略** | 同一份文档用 `fixed` / `structure` / `semantic` 各切一次，对比块边界 | 结构优先（标题/编号条款作块起点）零成本；语义档叠加句级 embedding 找断点 |
 | **混合检索** | 搜一个**精确型号/代码**（如 `ERR-4032`），切 `vector` 与 `hybrid` 看召回差异 | 中文 2-gram + 英文保序 tokenize，双路归一化加权融合 |
 | **重排 Rerank** | 质检台里开关重排，对比检索分数与重排分数的排序变化 | `RerankProvider` 接口 + Noop / Mock / OpenAICompat 三实现 |
@@ -115,7 +116,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **443 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **462 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -187,7 +188,7 @@ app/
 └── rag/                 # retriever → reranker → query_rewriter → generator
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 30 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 443 个离线单测（mock 供应商，无需网络）
+tests/                   # 462 个离线单测（mock 供应商，无需网络）
 scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测脚本
 ```
 
@@ -215,12 +216,14 @@ scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 443 个用例，全程离线
-cd frontend && npm test                     # 前端 58 个用例（vitest + jsdom）
+python -m pytest tests/ -v --tb=short       # 后端 462 个用例，全程离线
+cd frontend && npm test                     # 前端 63 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
-（当前 `443 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
+（当前 `462 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL」的用例。
+它们并非无用：那是 **pgvector 存储路径的唯一覆盖**，本地起 PG 并按 `AGENTS.md` 的
+`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` 两条要求即可真跑，本轮实测 **94 passed**。）
 
 前端测试覆盖五层：纯函数（`src/api/error.ts`）、Pinia store、axios 拦截器、路由守卫、组件挂载
 （真实挂载登录页）。**前端用例大多是为 K8 已修缺陷补的回归测试**，因此 K9 落地时对其中三条做了
@@ -244,7 +247,7 @@ cd frontend && npm test                     # 前端 58 个用例（vitest + jsd
 和**每次提问都要等**（流式是模拟的、每请求重建模型连接）。而这两件事有个共同前提：
 **检索侧得是真的** —— embedding 一直是 mock（64 维哈希词袋，无语义），召回质量本身不可评测，
 prompt 改完了也看不出好坏。K0 就是来解这个前置的。
-K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2、K3、K8、K9 已完成**：
+K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0–K4、K5–K10 全部完成**：
 
 | 块 | 内容 | 一句话动机 |
 |---|---|---|
@@ -252,7 +255,7 @@ K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2�
 | K1 ✅ | 真流式生成 | 已完成：原先是"先等完整答案再假打字机"，真模型下首字前空白 3–10 秒；现改为 `stage → sources → token → done` 真流式，来源先于答案可见，桩模型实测首字节 1.54s → 53ms |
 | K2 ✅ | 管线单例与连接复用 | 已完成：原先是每请求重建管线（实测白送 **653ms**，根因是 httpx 每个 client 要建 3 个 SSLContext）；现改为 lifespan 装配一次、请求期取用，摄取与问答共用同一份向量库与 embedding，顺带补 PG `pool_pre_ping` 与 OpenAI 显式 timeout/retries |
 | K3 ✅ | 答案质量（Prompt + 引用 + 阈值） | 已完成。**批 1**：system 规则走独立 `system` 消息、文档名解析提前到生成之前（每块带「[1]（来源：xxx.pdf · 第 3 块）」）、生成参数配置化 —— 13 问机器评测 **答案点名文档 0/10 → 10/10**、均耗 7.7s → **4.1s**，顺带照出并修掉「推理 token 挤空正文」等 3 个缺陷。**批 2**：①引用编号校验 `citation_issues`（模型写出不存在的 `[9]` 时不再无痕，贯通 API 与 SSE `done`）；②拒答三级分级（完全无关 / 只覆盖一部分 / 两资料冲突，冲突时并列双方而非擅自选边）；③命中阈值 0.1 → **0.40** —— 先量后改（库内 rank-5 raw 余弦最低 0.469、库外最高 0.371），A/B 实测**库内来源一条不丢、库外噪声每问 5 条 → 1 条** |
-| K4 | 摄取异步化 | 上传全程同步阻塞，大文件会撞超时且无进度、不可重试（**暂缓**：演示语料碰不到该痛点，验收标准已备好，见 roadmap 排期决策） |
+| K4 ✅ | 摄取异步化 | 已完成：上传从「全程同步阻塞」改为 **202 立即返回 + `status=pending`**，解析/切片/向量化丢进 `ThreadPoolExecutor`（`ingest_workers=2`），新建 `IngestionJob` 表记录 `stage`/`done_units`/`total_units`；前端进度列按 2 秒轮询、全部收敛即停；**失败可一键重试**（原件落盘 `data/uploads/{doc_id}.{ext}`，Docker 侧已加 `uploads` 具名卷）；重启自愈（启动时把卡住的 job 置 failed）。顺带把 embedding 批次 16 → 25（百炼单次上限），**400 切片文档往返 25 次 → 16 次**。⚠️ 异步化只让 UI 不阻塞、**不减少总时长** —— 砍时长的是这条批次调参，两件事没混在一个数字里归因 |
 | K8 ✅ | 可观测性与错误提示 | 已完成：日志原本只覆盖 6/34 个模块，**后端 12 处 + 前端 8 处静默失败**。`LOG_LEVEL` 可配（原先 `propagate=False`，连 pytest 的 `caplog` 都收不到 app 日志）、`X-Request-ID` 贯穿每个响应与每一行日志、12 项定级为缺陷并修复（含「摄取 step4 无 try/except → 文档永久卡在 `processing`」与「422 的数组 detail 在前端渲染成 `[object Object]`」） |
 | K9 ✅ | 前端测试框架 | 已完成：`frontend/package.json` 原先只有 `vue-tsc && vite build`，**K8 的前端改动无法走 TDD**，只能靠类型检查 + 构建 + 手工复现。现引入 vitest + jsdom + @vue/test-utils，**51 个用例覆盖纯函数 / store / 拦截器 / 路由守卫 / 组件挂载**；vitest 钉 3.x 是为了迁就 vite 5。补上框架当天，新写的第一个断言就照出一个从未生效的参数（`bugfix-log.md` #40） |
 | K5 ✅ | 答案反馈闭环 | 已完成：对话页每条 AI 回答下「有用 / 没用」+ 原因标签（答非所问 / 信息错误 / 引用有误 / 内容过时 / 其他），落库关联具体消息（一人一票，重复提交是 upsert）；`done` 事件与 `AskResponse` 带 `message_id` 供前端定位，反馈状态刷新不丢；`GET /api/kbs/{id}/feedback` 让数据可读、不 write-only |
@@ -266,8 +269,8 @@ K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0、K1、K2�
 - [系统架构](docs/architecture.md) —— 分层图 + 两条数据流
 - [开发路线图](docs/roadmap.md) —— 全部积木与完成状态
 - [进度日志](docs/progress-log.md) —— 每个积木的实现记录
-- [踩坑日志](docs/bugfix-log.md) —— 40 条按严重度分级的真实问题与修法
-- [需求卡片](docs/requirements/) —— 30 张，动工前先写、完成后验收
+- [踩坑日志](docs/bugfix-log.md) —— 47 条按严重度分级的真实问题与修法
+- [需求卡片](docs/requirements/) —— 36 张，动工前先写、完成后验收
 - [前端去 AI 味设计指令](docs/design-guide.md) —— 禁紫蓝渐变、品牌色 5-10%、圆角分层等硬规则
 - [前端落地方案](docs/design-manifest.md) —— 按本项目 10 个页面的实际形态定制，逐页改什么 + 落地顺序
 - [AGENTS.md](AGENTS.md) —— 给 AI 编码助手看的项目上下文

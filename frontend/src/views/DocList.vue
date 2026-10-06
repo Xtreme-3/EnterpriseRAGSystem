@@ -44,9 +44,34 @@
       </el-table-column>
       <el-table-column prop="status" label="状态" width="110" align="center">
         <template #default="{ row }">
-          <el-tag :type="statusTag(row.status)" size="small">
+          <!-- 失败原因藏在 tooltip 里：列表里塞长文案会把行高撑爆 -->
+          <el-tooltip
+            v-if="row.status === 'failed' && row.error"
+            :content="row.error"
+            placement="top"
+          >
+            <el-tag :type="statusTag(row.status)" size="small">
+              {{ statusLabel(row.status) }}
+            </el-tag>
+          </el-tooltip>
+          <el-tag v-else :type="statusTag(row.status)" size="small">
             {{ statusLabel(row.status) }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <!-- K4：异步摄取的进度。终态文档不占位（显示 —），避免满屏空格子 -->
+      <el-table-column label="进度" width="190">
+        <template #default="{ row }">
+          <div v-if="isPending(row)" class="progress-cell">
+            <el-progress
+              v-if="row.job && row.job.total_units > 0"
+              :percentage="progressPercent(row)"
+              :stroke-width="6"
+              :show-text="false"
+            />
+            <span class="progress-text">{{ progressLabel(row) }}</span>
+          </div>
+          <span v-else class="progress-idle">—</span>
         </template>
       </el-table-column>
       <el-table-column prop="chunk_count" label="切片数" width="90" align="center" />
@@ -55,15 +80,25 @@
           {{ formatDate(row) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="100" align="center">
+      <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
+          <!-- K4：failed 可一键重试，不必删掉重传（原始文件已留存在服务端） -->
+          <el-button
+            v-if="canEdit && row.status === 'failed'"
+            text
+            type="primary"
+            size="small"
+            @click="handleRetry(row)"
+          >
+            重试
+          </el-button>
           <!-- I2 RBAC：仅 editor+ 可删除 -->
           <el-popconfirm v-if="canEdit" title="删除后不可恢复，确定删除？" @confirm="handleDelete(row.id)">
             <template #reference>
               <el-button text type="danger" size="small">删除</el-button>
             </template>
           </el-popconfirm>
-          <span v-else>—</span>
+          <span v-if="!canEdit">—</span>
         </template>
       </el-table-column>
     </el-table>
@@ -100,7 +135,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, type UploadFile, type UploadInstance } from "element-plus";
 import { Upload, UploadFilled, Loading, ArrowLeft } from "@element-plus/icons-vue";
@@ -164,6 +199,72 @@ function statusLabel(status: string): string {
   return map[status] || status;
 }
 
+// ---- K4：异步摄取进度 ----
+
+/** 终态：到这两个状态后进度不再变化，轮询可以停。 */
+const TERMINAL_STATUSES = ["indexed", "failed"];
+const STAGE_LABELS: Record<string, string> = {
+  pending: "排队中",
+  parsing: "解析中",
+  chunking: "切片中",
+  embedding: "向量化",
+  indexing: "写入索引",
+};
+
+function isPending(row: DocItem): boolean {
+  return !TERMINAL_STATUSES.includes(row.status);
+}
+
+function progressPercent(row: DocItem): number {
+  const job = row.job;
+  if (!job || !job.total_units) return 0;
+  return Math.min(100, Math.round((job.done_units / job.total_units) * 100));
+}
+
+function progressLabel(row: DocItem): string {
+  const job = row.job;
+  // job 为 null 只出现在"文档状态还没被后台任务改过"的极窄窗口（或老数据），
+  // 此时给一个中性文案，不要显示空白。
+  if (!job) return "处理中";
+  const label = STAGE_LABELS[job.stage] || job.stage;
+  // 只有向量化阶段有可数的单位（切片条数），其余阶段给的是阶段名本身。
+  if (job.stage === "embedding" && job.total_units > 0) {
+    return `${label} ${job.done_units}/${job.total_units}`;
+  }
+  return label;
+}
+
+/** 列表里是否存在未收敛的文档 —— 决定要不要继续轮询。 */
+const hasPending = computed(() => docs.value.some(isPending));
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+/**
+ * 按需轮询：只在列表里还有未收敛文档时开，全部到终态后自动停。
+ *
+ * 为什么不用 WebSocket / SSE：状态是"低频、可丢、可重取"的，轮询实现成本最低；
+ * 而且这里 2 秒一轮、只在有任务时开，对后端压力可忽略。
+ */
+function syncPolling() {
+  if (hasPending.value) {
+    if (pollTimer === null) {
+      pollTimer = setInterval(() => {
+        // silent：不要每 2 秒把整页打回加载态（loading 会盖掉表格）
+        void fetchDocs(true);
+      }, 2000);
+    }
+  } else {
+    stopPolling();
+  }
+}
+
 function formatDate(row: DocItem): string {
   if (!row.created_at) return "—";
   return new Date(row.created_at).toLocaleString("zh-CN");
@@ -173,19 +274,26 @@ function onFileChange(file: UploadFile) {
   pendingFile.value = file.raw || null;
 }
 
-async function fetchDocs() {
-  loading.value = true;
+/**
+ * @param silent 轮询触发的刷新：不要打 loading（会把表格整片盖掉，每 2 秒闪一次），
+ *               也不要弹错误 toast（一次网络抖动不该连弹提示，下次轮询会自愈）。
+ */
+async function fetchDocs(silent = false) {
+  if (!silent) loading.value = true;
   try {
     docs.value = await docApi.list(kbId);
+    syncPolling();
   } catch (err: any) {
     if (err.response?.status === 403) {
       ElMessage.error("无权访问该知识库");
+      stopPolling();
       router.push("/kbs");
       return;
     }
-    ElMessage.error(extractErrorMessage(err, "获取文档列表失败"));
+    if (!silent) ElMessage.error(extractErrorMessage(err, "获取文档列表失败"));
+    else stopPolling();
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -237,13 +345,28 @@ async function handleUpload() {
   uploading.value = true;
   try {
     await docApi.upload(kbId, file);
-    ElMessage.success("上传成功，文档已向量化");
+    // K4：上传接口现在 202 立即返回，向量化在后台跑 —— 说"已向量化"是不准确的
+    ElMessage.success("上传成功，正在后台解析");
     showUpload.value = false;
     await fetchDocs();
   } catch (err: any) {
     ElMessage.error(extractErrorMessage(err, "上传失败"));
   } finally {
     uploading.value = false;
+  }
+}
+
+/** K4：重试一份 failed 的文档。原始文件留在服务端，不必删掉重传。 */
+async function handleRetry(row: DocItem) {
+  try {
+    await docApi.retry(row.id);
+    ElMessage.success("已重新提交解析");
+    await fetchDocs();
+  } catch (err: any) {
+    // 409 覆盖两种可预期情况：文档现在不是 failed（可能刚被别人重试成功）、
+    // 以及原始文件已不可用。后端把具体原因写在 detail 里，直接透传即可。
+    ElMessage.error(extractErrorMessage(err, "重试失败"));
+    await fetchDocs(true);
   }
 }
 
@@ -258,6 +381,8 @@ async function handleDelete(docId: number) {
 }
 
 onMounted(init);
+// K4：离开页面必须清掉轮询，否则定时器会在已卸载的组件上一直打接口
+onUnmounted(stopPolling);
 </script>
 
 <style scoped>
@@ -308,5 +433,22 @@ onMounted(init);
 
 .docs-empty {
   margin-top: 60px;
+}
+
+/* K4：进度单元格 —— 进度条在文字上方，整体靠左不抢视觉重量 */
+.progress-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: var(--app-ink-secondary);
+  line-height: 1.2;
+}
+
+.progress-idle {
+  color: var(--app-ink-disabled);
 }
 </style>

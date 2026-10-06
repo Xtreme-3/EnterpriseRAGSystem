@@ -20,6 +20,16 @@ class EmbeddingProvider(ABC):
     def dim(self) -> int:
         """向量维度，用于初始化向量库集合。"""
 
+    @property
+    def max_batch(self) -> int:
+        """单次 ``embed`` 调用可接受的文本条数上限（K4）。
+
+        非抽象、带默认值：摄取流水线用它把 embed 切成可上报进度的批次。
+        实现方按自家接口上限覆写即可 —— ``OpenAICompat`` 覆写为百炼的 25。
+        放在 provider 上而不是配置里，是为了**避免两处各写一个批次值而漂移**。
+        """
+        return 16
+
 
 class LLMProvider(ABC):
     """大模型文本生成。"""

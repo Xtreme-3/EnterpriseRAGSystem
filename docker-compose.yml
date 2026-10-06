@@ -52,6 +52,12 @@ services:
 
       # 鉴权：上线前务必换成随机串（openssl rand -hex 32）
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+    volumes:
+      # K4：异步摄取后，「重试」依赖服务端还留着上传原件（data/uploads/{doc_id}.{ext}）。
+      # 不挂卷的话容器一重建原件就没了，失败文档的 retry 会一律回 409
+      # 「原始文件已不可用」——本地开发看不出来，只有重建容器才暴露。
+      # 只挂 uploads 子目录，避免把 /app/data 整个盖掉。
+      - uploads:/app/data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -68,3 +74,5 @@ services:
 
 volumes:
   pgdata:
+  # K4：上传原件（重试所需），与 pgdata 一样跨容器重建保留
+  uploads:
