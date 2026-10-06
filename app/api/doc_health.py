@@ -60,6 +60,33 @@ class DocHealthResponse(BaseModel):
     hot_docs: list[HotDoc]
 
 
+# ---- 共享聚合（G5/G6 一个真相源）----
+
+def compute_hit_stats(
+    db: Session, kb_id: int
+) -> tuple[list[Document], dict[int, int], dict[int, datetime], int]:
+    """KB 的文档清单 + 每文档被问答命中的次数与最近命中时间。
+
+    从 qa_logs.hit_doc_ids（JSON 数组）聚合；日志按时间升序遍历，后写覆盖即最新。
+    返回 ``(docs, hit_counts, last_hits, total_logs)``——数据看板（G6）复用本函数，
+    不复制命中统计逻辑。
+    """
+    docs = db.query(Document).filter(Document.kb_id == kb_id).all()
+    hit_counts: dict[int, int] = {}
+    last_hits: dict[int, datetime] = {}
+    logs = (
+        db.query(QaLog)
+        .filter(QaLog.kb_id == kb_id)
+        .order_by(QaLog.created_at.asc())
+        .all()
+    )
+    for log in logs:
+        for doc_id in _parse_doc_ids(log.hit_doc_ids):
+            hit_counts[doc_id] = hit_counts.get(doc_id, 0) + 1
+            last_hits[doc_id] = log.created_at
+    return docs, hit_counts, last_hits, len(logs)
+
+
 # ---- endpoint ----
 
 @router.get("/{kb_id}/doc-health", response_model=DocHealthResponse)
@@ -72,21 +99,7 @@ def get_kb_doc_health(
     """文档健康分析：死文档清单 + 命中热力 top N。"""
     _get_user_kb_or_403(db, kb_id, current_user)
 
-    docs = db.query(Document).filter(Document.kb_id == kb_id).all()
-    logs = (
-        db.query(QaLog)
-        .filter(QaLog.kb_id == kb_id)
-        .order_by(QaLog.created_at.asc())
-        .all()
-    )
-
-    # 聚合每文档命中次数与最近命中时间（日志按时间升序，后写覆盖即最新）
-    hit_counts: dict[int, int] = {}
-    last_hits: dict[int, datetime] = {}
-    for log in logs:
-        for doc_id in _parse_doc_ids(log.hit_doc_ids):
-            hit_counts[doc_id] = hit_counts.get(doc_id, 0) + 1
-            last_hits[doc_id] = log.created_at
+    docs, hit_counts, last_hits, total_logs = compute_hit_stats(db, kb_id)
 
     total_documents = len(docs)
     indexed = sum(1 for d in docs if d.status == "indexed")
@@ -127,7 +140,7 @@ def get_kb_doc_health(
             indexed=indexed,
             active_count=active_count,
             dead_count=dead_count,
-            total_questions=len(logs),
+            total_questions=total_logs,
             hit_rate=round(active_count / total_documents, 2) if total_documents else 0.0,
         ),
         dead_docs=dead_docs,

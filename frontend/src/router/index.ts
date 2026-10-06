@@ -56,6 +56,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/DocHealth.vue"),
       },
       {
+        path: "kbs/:kbId/dashboard",
+        name: "Dashboard",
+        component: () => import("@/views/Dashboard.vue"),
+      },
+      {
         path: "kbs/:kbId/qa-logs",
         name: "QaLogs",
         component: () => import("@/views/QaLogs.vue"),

@@ -145,6 +145,7 @@ from app.api.documents import router as documents_router  # noqa: E402
 from app.api.chat import router as chat_router  # noqa: E402
 from app.api.inspect import router as inspect_router  # noqa: E402
 from app.api.diagnostics import router as diagnostics_router  # noqa: E402
+from app.api.dashboard import router as dashboard_router  # noqa: E402
 from app.api.doc_health import router as doc_health_router  # noqa: E402
 
 app.include_router(auth_router)
@@ -154,4 +155,5 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(inspect_router)
 app.include_router(diagnostics_router)
+app.include_router(dashboard_router)
 app.include_router(doc_health_router)

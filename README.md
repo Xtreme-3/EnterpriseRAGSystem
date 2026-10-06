@@ -4,7 +4,7 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **后端 432 + 前端 57** 个测试用例全绿 · **30** 个 API 端点 · **10** 个前端页面 · **4** 种文档格式 · 全链路可离线运行
+> **后端 435 + 前端 58** 个测试用例全绿 · **31** 个 API 端点 · **11** 个前端页面 · **4** 种文档格式 · 全链路可离线运行
 
 ---
 
@@ -113,7 +113,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **432 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **435 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -185,7 +185,7 @@ app/
 └── rag/                 # retriever → reranker → query_rewriter → generator
 frontend/src/            # Vue3 前端，10 个页面
 docs/                    # 架构图 / 30 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 432 个离线单测（mock 供应商，无需网络）
+tests/                   # 435 个离线单测（mock 供应商，无需网络）
 scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测脚本
 ```
 
@@ -213,12 +213,12 @@ scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 432 个用例，全程离线
-cd frontend && npm test                     # 前端 55 个用例（vitest + jsdom）
+python -m pytest tests/ -v --tb=short       # 后端 435 个用例，全程离线
+cd frontend && npm test                     # 前端 58 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
-（当前 `432 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
+（当前 `435 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL 或真实 API Key」的用例。）
 
 前端测试覆盖五层：纯函数（`src/api/error.ts`）、Pinia store、axios 拦截器、路由守卫、组件挂载
 （真实挂载登录页）。**前端用例大多是为 K8 已修缺陷补的回归测试**，因此 K9 落地时对其中三条做了

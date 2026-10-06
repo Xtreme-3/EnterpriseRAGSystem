@@ -178,6 +178,18 @@ class Settings(BaseSettings):
             raise ValueError("cache_semantic_threshold 必须在 (0, 1] 区间内")
         return v
 
+    @field_validator("data_dir")
+    @classmethod
+    def _anchor_data_dir(cls, v: Path) -> Path:
+        """DATA_DIR 允许相对路径（.env 里写 ``DATA_DIR=data``），但必须锚定到仓库根。
+
+        相对路径是相对**进程 cwd** 解析的：服务从非仓库根目录启动（如
+        ``cd frontend && uvicorn app.main:app``）时，"data" 会在那个目录下
+        新建一个空库——demo 账号"凭空消失"、问答历史全空，且无任何报错
+        （2026-10-06 实测踩中）。锚定后与启动目录彻底解耦。
+        """
+        return v if v.is_absolute() else ROOT_DIR / v
+
     @property
     def thinking_flag(self) -> bool | None:
         """三态映射："" → None（不下发字段）。"""

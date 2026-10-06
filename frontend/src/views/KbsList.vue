@@ -40,6 +40,7 @@
                 <el-dropdown-item command="inspect">检索测试</el-dropdown-item>
                 <el-dropdown-item command="diagnostics">索引体检</el-dropdown-item>
                 <el-dropdown-item command="docHealth">文档状态</el-dropdown-item>
+                <el-dropdown-item command="dashboard">数据看板</el-dropdown-item>
                 <el-dropdown-item command="qaLogs">问答历史</el-dropdown-item>
                 <el-dropdown-item v-if="kb.role === 'owner'" command="members" divided>
                   成员管理
@@ -206,6 +207,8 @@ function handleKbCommand(cmd: string, kb: KBItem) {
     goDiagnostics(kb.id);
   } else if (cmd === "docHealth") {
     goDocHealth(kb.id);
+  } else if (cmd === "dashboard") {
+    goDashboard(kb.id);
   } else if (cmd === "qaLogs") {
     goQaLogs(kb.id);
   } else if (cmd === "members") {
@@ -305,6 +308,10 @@ function goDocHealth(kbId: number) {
 
 function goQaLogs(kbId: number) {
   router.push(`/kbs/${kbId}/qa-logs`);
+}
+
+function goDashboard(kbId: number) {
+  router.push(`/kbs/${kbId}/dashboard`);
 }
 
 function validateFileExt(file: File): boolean {
