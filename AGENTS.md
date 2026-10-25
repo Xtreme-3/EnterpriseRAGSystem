@@ -370,7 +370,15 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 
 **后端 489 测试全绿**（376 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 74 测试全绿**。
 跳过的那 113 项**并非无用**：它们是 pgvector 路径的唯一覆盖，本地起 PG 后按上文「测试」节的
-三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，本轮实测 94 passed。
+三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，
+2026-10-26 实测（L1–L3 之后）**带闸门的 13 个文件 137 passed / 0 failed**
+（一次性 `pgvector/pgvector:pg17` 容器挂 5433、无具名卷，不碰交付栈的 `enterprise-rag_pgdata`）。
+⚠️ **PG 批次要按文件点名跑，别整个 tests/ 混在 pgvector 环境跑**：test_cache / test_dashboard /
+test_singleton / test_feedback 等离线用例硬编码 SQLite 路径，混跑会染红一批与 PG 无关的
+用例（2026-10-26 实测整目录混跑 14 failed，全是这批）。点名清单：
+`test_auth / test_chat / test_conversation / test_diagnostics / test_doc_health / test_documents /
+test_inspect / test_kbs / test_multiturn / test_pgvector_store / test_pgvector_dim_guard /
+test_qa_logs / test_rbac`。
 **阶段六已收官（2026-10-26，roadmap 50/50 全绿）**：L1 双阈值拒答 ✅ → L2 审计日志 ✅ → L3 扫描件 OCR ✅。
 未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、SSO/LDAP、PPT、RPA 集成）。
 

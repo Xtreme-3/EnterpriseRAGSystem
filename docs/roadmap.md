@@ -39,7 +39,10 @@
 > 详见 [L2 需求卡片](requirements/L2-audit-log.md) 与 bugfix-log #49。
 > **2026-10-26 L3 完成，阶段六收官（50/50 全绿）**：扫描件 OCR（RapidOCR + pypdfium2，
 > 三档降级绝不回归未装 OCR 的现状），详见 [L3 需求卡片](requirements/L3-ocr-fallback.md)。
-> 遗留待办：Docker 镜像含 `[ocr]` extra 的重建验证（本机 Docker 未运行，与 PG-gated 补跑同批）。
+> 遗留待办已清零（2026-10-26 Docker 开机后同批补完）：①PG-gated 批次 13 文件
+> **137 passed / 0 failed**（一次性 5433 容器 + 隔离 DATA_DIR，零污染交付数据）；
+> ②Docker 镜像含 `[ocr]` 重建 + 冒烟 + **扫描件容器内端到端 indexed** ——
+> 过程照出 opencv 缺原生库的 bugfix #50（Dockerfile apt 层补 libgl1/libglib2.0-0/libxcb1）。
 
 ---
 

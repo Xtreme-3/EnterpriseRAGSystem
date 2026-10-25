@@ -16,9 +16,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# curl 供 HEALTHCHECK 使用；psycopg2 走 binary 轮子，无需编译工具链
+# curl 供 HEALTHCHECK 使用；psycopg2 走 binary 轮子，无需编译工具链。
+# libgl1 / libglib2.0-0 / libxcb1 是 opencv（rapidocr 的依赖）的运行时原生库 ——
+# slim 基础镜像没有它们，缺了会让 import 以 libxcb.so.1 缺失报错，
+# 被 L3 的 available() 降级吞成「未安装 OCR 组件」（实测踩过，见 bugfix-log #50）。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends curl libgl1 libglib2.0-0 libxcb1 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./

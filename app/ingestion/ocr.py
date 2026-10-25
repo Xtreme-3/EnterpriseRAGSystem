@@ -25,13 +25,19 @@ _engine_lock = threading.Lock()
 
 
 def available() -> bool:
-    """rapidocr 与 pypdfium2 是否都已安装（只探测 import，不构造引擎）。"""
+    """rapidocr 与 pypdfium2 是否都已安装（只探测 import，不构造引擎）。
+
+    ImportError 的具体原因必须进日志（bugfix #50）：「没装 extra」和「装了但缺系统
+    原生库（libxcb/libgl）」在返回值上都是 False，不区分的话错误信息会把排查方向
+    指到 pip install，而真正要修的是 Dockerfile 的 apt 层。
+    """
     try:
         import pypdfium2  # noqa: F401
         from rapidocr_onnxruntime import RapidOCR  # noqa: F401
 
         return True
-    except ImportError:
+    except ImportError as exc:
+        logger.warning("OCR 组件不可用：%s", exc)
         return False
 
 

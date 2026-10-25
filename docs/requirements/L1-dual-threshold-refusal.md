@@ -96,9 +96,12 @@
 - [x] 双库 `k3_eval` 回归：kb_1 `9/10 · 10/10 · 3/3`、kb_2 `13/13 · 13/13 · 3/3`，
       门开与门关**逐位相同**，零回归（报告见 `docs/eval/l1-kb{1,2}-gate-{on,off}.md`）
 - [x] 后端全量 pytest 0 failed（**473 collected / 360 passed / 0 failed / 113 skipped**）
-- [ ] ⚠️ **PG-gated 113 项未真跑**（本机 Docker Desktop 未运行，未能起 PG）——
-      门的判据已刻意做成与存储无关，但 pgvector 路径上的 `ask()` 会走 `retrieve_gated`，
-      下次起 PG 时按 AGENTS.md 的三步隔离跑一遍确认
+- [x] ⚠️ ~~PG-gated 113 项未真跑~~ → **2026-10-26 已补**：一次性 PG 容器（5433、
+      无具名卷，零污染交付数据）+ `VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` 跑
+      **13 个带闸门的测试文件：137 passed / 0 failed**（含 pgvector 路径 `ask()` 走
+      `retrieve_gated` 的用例，门的判据与存储无关的设计得到验证）。⚠️ 注意**别把整个
+      tests/ 目录混在 pgvector 环境跑**：test_cache / test_dashboard 等离线用例硬编码
+      SQLite 文件路径，混跑会染红一批与本块无关的用例（本轮实测 14 例），详见 AGENTS.md 测试节
 
 ## 依赖
 

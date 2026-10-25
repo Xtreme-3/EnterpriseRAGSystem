@@ -1470,3 +1470,42 @@ flush（`db.add(kb); db.flush()` 等），写锁一直持有到请求结束 `get
 2. **best-effort 的 `except` 会把「没写进去」变成「静默没写进去」**。凡是吞异常的
    挂钩，配套测试必须直接断言落库结果（行数 / 内容），不能只断言业务响应 ——
    `0 == 3` 那条用例就是这样抓住问题的。
+
+---
+
+## 50. 🔴 L3 的 [ocr] 装进了镜像，容器里却「未安装」—— opencv 缺原生库，被降级语义吞掉
+
+**症状**：Dockerfile 依赖抽取加了 `[ocr]`、镜像构建成功、三容器 healthy、
+`docker_smoke.py` 10 组断言全过 —— 但把扫描件 fixture 真实上传到 18080，
+文档 failed：「疑似扫描件（1 页均无文字层）：需要安装 OCR 组件
+（pip install rapidocr-onnxruntime pypdfium2）」。
+
+**根因**：rapidocr-onnxruntime 依赖 opencv-python，其 `cv2` 二进制要
+libGL / libxcb / libglib 运行时库，slim 基础镜像没有。容器内
+`import rapidocr_onnxruntime` 实际报 `ImportError: libxcb.so.1`，
+而 L3 的 `ocr.available()` 把 ImportError **一律**降级为「未安装」——
+设计给「没装 extra」准备的降级分支把「装了但跑不起来」也一并吞了，
+错误信息还把方向指错（让人去 pip install，实际缺的是系统库）。
+
+**为什么前面几道验证都没照出来**：镜像构建只证明 pip install 成功
+（wheel 装上 ≠ import 成功）；冒烟脚本上传的是文本文件，根本不触发 OCR 路径。
+**只有真实传一份扫描件进容器，才算验证了「OCR 在交付环境可用」**。
+
+**修复**：
+
+- Dockerfile apt 层补 `libgl1 libglib2.0-0 libxcb1`（先在运行中的容器里
+  `apt-get install` 这三件验证 import OK，确认最小集合后烤进镜像层）；
+- `ocr.available()` 对 ImportError 记 warning（含原始异常信息）——
+  下次「装了但坏了」在日志里直接能看到 `libxcb.so.1`，不用再进容器排查。
+
+**修复后实测**：镜像重建 → 三容器 healthy → 扫描件经 18080 上传 →
+**indexed / chunks=1 / error=None**，删除测试文档收尾。
+
+**教训**：
+
+1. 「安装成功」和「能 import」之间隔着系统原生库。**Python 依赖进容器必须做一次
+   import 冒烟**（构建期或启动期），wheel 落盘不算数。
+2. **降级分支的错误信息要区分「没装包」和「装了但坏了」**——两者对用户的表现
+   都是功能不可用，但修法完全不同；不区分时错误提示会把人带向错误的修复路径。
+3. 验证交付功能必须走它的**真实触发路径**（这里是扫描件上传），通用冒烟
+   （文本上传）覆盖不到冷路径。

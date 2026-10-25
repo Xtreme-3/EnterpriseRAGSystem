@@ -75,9 +75,11 @@
 - [x] 后端全量 pytest 0 failed（新增用例带 skipif 闸门；门后真跑 OCR）
 - [x] 前端 vitest + build 全绿（本块不动前端，回归确认）
 - [x] 新增断言做过反向验证（把阈值判定改坏 / 断言改错，确认变红）
-- [ ] ⚠️ **Docker 镜像重建验证挂起**：本机 Docker Desktop 未运行，`[ocr]` 进镜像的
-      安装面只改了 Dockerfile 未实际构建 —— 下次 Docker 可用时 `docker compose build`
-      验证（与 PG-gated 113 项同批补）
+- [x] ⚠️ ~~Docker 镜像重建验证挂起~~ → **2026-10-26 已补**：镜像含 `[ocr]` 重建成功、
+      三容器 healthy、`docker_smoke.py` 10 组断言全过、**扫描件经 18080 真实上传 →
+      indexed / chunks=1**。过程中照出并修复 bugfix #50（opencv 缺 libxcb/libgl 原生库，
+      被 `available()` 降级吞成「未安装」—— Dockerfile apt 层补 `libgl1 libglib2.0-0 libxcb1`，
+      `available()` 改为记录 ImportError 详情）
 
 ## 实测数字（2026-10-26）
 
