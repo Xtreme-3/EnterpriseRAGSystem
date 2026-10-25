@@ -23,8 +23,11 @@ Markdown 原先和 ``.txt`` 共用纯文本分支，等于没剥。
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".xlsx", ".md", ".markdown", ".txt"}
 
@@ -80,8 +83,47 @@ def _normalize(text: str) -> str:
 def _parse_pdf(path: Path) -> str:
     from pypdf import PdfReader
 
+    from app.config import get_settings
+    from app.ingestion import ocr
+
+    settings = get_settings()
     reader = PdfReader(str(path))
-    parts = [page.extract_text() or "" for page in reader.pages]
+    parts: list[str] = []
+    weak_pages: list[int] = []
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        # 去空白后数字符：纯换行/空格不算文字（扫描件常抽出这种残余）
+        if len("".join(text.split())) < settings.ocr_min_text_chars:
+            weak_pages.append(i)
+        parts.append(text)
+
+    # L3 弱页 OCR，三档策略（决策 3，绝不回归未装 OCR 的现状）：
+    # ① 弱页 + OCR 可用 → 逐页识别，文本替换该页原（近乎为空的）内容；
+    # ② 弱页 + 有强页 + OCR 不可用 → 跳过弱页，行为与改动前一致
+    #    （图片封面的文字 PDF 在未装 OCR 的环境照样摄取成功）；
+    # ③ 整本皆弱 + OCR 不可用/关闭 → 诚实失败，点名原因与出路
+    #    （此前是笼统的「文档解析后无有效内容」，用户不知道是扫描件）。
+    if weak_pages and settings.ocr_enabled and ocr.available():
+        logger.info(
+            "PDF 存在低文字页，尝试 OCR：%s（%d/%d 页）", path.name, len(weak_pages), len(parts)
+        )
+        try:
+            ocr_texts = ocr.ocr_pages(path, weak_pages)
+        except Exception:
+            # OCR 整体崩溃（引擎加载失败等）：留痕后按未装 OCR 的路径继续
+            logger.exception("OCR 执行失败（按无 OCR 继续处理）file=%s", path)
+        else:
+            for idx, ocr_text in zip(weak_pages, ocr_texts):
+                if ocr_text.strip():
+                    parts[idx] = ocr_text
+    elif len(weak_pages) == len(parts):
+        reason = (
+            "OCR 未启用（OCR_ENABLED=false）"
+            if not settings.ocr_enabled
+            else "需要安装 OCR 组件（pip install rapidocr-onnxruntime pypdfium2）"
+        )
+        raise ValueError(f"疑似扫描件（{len(parts)} 页均无文字层）：{reason}")
+
     return _normalize("\n".join(parts))
 
 

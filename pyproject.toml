@@ -22,6 +22,9 @@ dependencies = [
 [project.optional-dependencies]
 api = ["fastapi>=0.111", "uvicorn>=0.30", "python-multipart>=0.0.9"]
 dev = ["pytest>=8.0", "httpx>=0.27"]
+# L3 扫描件 OCR：模型内置在 wheel 里，安装后离线可用。未装时业务自动降级
+# （文字 PDF 不受影响；纯图扫描件以「疑似扫描件」明确原因 failed）。
+ocr = ["rapidocr-onnxruntime>=1.2", "pypdfium2>=4"]
 
 [build-system]
 requires = ["setuptools>=68"]

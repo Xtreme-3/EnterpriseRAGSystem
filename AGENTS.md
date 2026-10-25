@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（482 用例）；前端 vitest + jsdom + @vue/test-utils（74 用例）
+- **测试**：后端 pytest + httpx + TestClient（489 用例）；前端 vitest + jsdom + @vue/test-utils（74 用例）
 
 ## 目录结构
 
@@ -291,6 +291,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"        # 后端 + 测试依赖
 pip install -e ".[api]"        # 需要 API 服务时
+pip install -e ".[dev,api,ocr]"  # + 扫描件 OCR（rapidocr-onnxruntime / pypdfium2，模型内置离线可用）
 copy .env.example .env         # 填 DASHSCOPE_API_KEY（LLM）/ BAILIAN_API_KEY（Embedding）
 python scripts/demo.py         # 离线冒烟（mock 供应商）
 ```
@@ -365,12 +366,13 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | K4 摄取异步化（202→pending + `IngestionJob` 进度表 + `POST /documents/{id}/retry`） | ✅ |
 | L1 双阈值拒答（`answer_threshold` 0.48 + 关键词覆盖度 <2 → 零 LLM 成本拒答，仅 hybrid） | ✅ |
 | L2 审计日志（`audit_logs` append-only + 11 写点挂钩 + `GET /api/audit-logs` admin-only + 审计页） | ✅ |
+| L3 扫描件 OCR（`_parse_pdf` 弱页 fallback RapidOCR，三档降级，`[ocr]` extra） | ✅ |
 
-**后端 482 测试全绿**（369 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 74 测试全绿**。
+**后端 489 测试全绿**（376 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 74 测试全绿**。
 跳过的那 113 项**并非无用**：它们是 pgvector 路径的唯一覆盖，本地起 PG 后按上文「测试」节的
 三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，本轮实测 94 passed。
-**阶段六进行中（见 `docs/roadmap.md`）**：L1 双阈值拒答 ✅ → L2 审计日志 ✅ → L3 扫描件 OCR（RapidOCR）⬜。
-未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、PPT、RPA 集成）。
+**阶段六已收官（2026-10-26，roadmap 50/50 全绿）**：L1 双阈值拒答 ✅ → L2 审计日志 ✅ → L3 扫描件 OCR ✅。
+未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、SSO/LDAP、PPT、RPA 集成）。
 
 ### 审计日志（L2，改写操作路由前必读）
 
@@ -383,3 +385,15 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 - **审计表不设 FK、不级联**（`kb_id`/`actor_id` 是裸 Integer）—— 删库不能带走它自己的删除记录；
   新增审计字段同样走「独立成表/缺列则 ALTER」的约定
 - 查询接口 `GET /api/audit-logs` 仅 admin（`deps.require_admin`），本仓第一个全局（非 KB 作用域）接口
+
+### 扫描件 OCR（L3，改 `_parse_pdf` / 摄取解析前必读）
+
+- **fallback 在 `_parse_pdf` 内部**（`app/ingestion/ocr.py` + `parsers.py`），按页判定：
+  单页文字层去空白 < `OCR_MIN_TEXT_CHARS`（默认 20）→ 该页进 OCR 候选；同步 `ingest_file`
+  与 K4 异步 `_run_job` 都走 `parse_file`，**一处改动两路覆盖，管线零波及**
+- **三档降级**：OCR 可用 → 弱页逐页识别替换；不可用但有文字页 → 跳过弱页（行为同改动前，
+  图片封面不拖垮文字 PDF）；整本皆弱 → `ValueError` 点名「疑似扫描件」+ 安装指引
+- 依赖在 **`[ocr]` extra**（rapidocr-onnxruntime + pypdfium2，模型内置 wheel 离线可用），
+  未装不报启动错误；OCR 测试带 `skipif` 闸门（未装自动 skip，pgvector 用例同款模式）
+- **fixture 生成走系统 Python**（`scripts/make_ocr_fixture.py`，fpdf2+PIL+simsun 字体），
+  产物 `tests/fixtures/ocr-scanned.pdf` 已提交 —— CI 与其他机器**只消费不生成**

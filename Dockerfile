@@ -25,7 +25,9 @@ COPY pyproject.toml README.md ./
 
 # 从 pyproject.toml 抽取依赖清单后安装 —— pyproject.toml 仍是唯一依赖来源，
 # 但改动 app/ 不会让这层缓存失效，省下每次重装 chromadb 的时间。
-RUN python -c "import tomllib,pathlib; p=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8')); print('\n'.join(p['project']['dependencies'] + p['project']['optional-dependencies']['api']))" > /tmp/requirements.txt \
+# L3：镜像带上 [ocr] extra（rapidocr-onnxruntime + pypdfium2，+200~300MB），
+# 让 Docker 交付库也能摄取扫描件 PDF。
+RUN python -c "import tomllib,pathlib; p=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8')); print('\n'.join(p['project']['dependencies'] + p['project']['optional-dependencies']['api'] + p['project']['optional-dependencies']['ocr']))" > /tmp/requirements.txt \
  && pip install ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} -r /tmp/requirements.txt
 
 COPY app ./app

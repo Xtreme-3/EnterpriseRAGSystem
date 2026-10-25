@@ -15,8 +15,8 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: 安装依赖（后端 + API + 测试）
-        run: pip install -e ".[dev,api]"
-      - name: 后端测试（435 用例；PG/真 Key 用例自动跳过）
+        run: pip install -e ".[dev,api,ocr]"
+      - name: 后端测试（PG/真 Key 用例自动跳过；OCR 随 [ocr] extra 真跑）
         run: python -m pytest tests/ -q
 
   frontend:

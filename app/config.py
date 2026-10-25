@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     # 速率限制，并发开大只会让每个任务都变慢并触发限流；而 UI 已经不阻塞了，
     # 排队对用户是可接受的。要同时灌大量文档时再调大。
     ingest_workers: int = 2
+    # ---- L3 扫描件 OCR ----
+    # 单页 pypdf 抽出的文字去空白后低于 ocr_min_text_chars → 该页进 OCR 候选
+    # （按页判定，不按整本平均：图片封面 + 文字正文的混合 PDF 只 OCR 封面那页）。
+    # 三档降级策略见 docs/requirements/L3-ocr-fallback.md 决策 3 —— 未安装
+    # [ocr] extra（rapidocr-onnxruntime / pypdfium2）时不报启动错误。
+    ocr_enabled: bool = True
+    ocr_min_text_chars: int = 20
     # 余弦相似度命中阈值：低于此值的切片视为无关，不计入命中来源/日志统计
     # （真实 embedding 对无关文本常有小正分，0 阈值会让噪声污染质检/溯源/问答日志）
     #
