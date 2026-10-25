@@ -205,6 +205,9 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
 - **vitest 钉在 3.x 是为了迁就 vite 5**：`vitest@5` 的 peer 要求 `vite ^6.4||^7||^8`、
   `vitest@4` 要求 `^6||^7`，本仓 vite 是 5.4.21，都装不上。
   **要升 vite 就一起升测试框架**，别单独动其中一个
+- **node 必须 ≥ 22**（`package.json` engines 钉住，CI 同步用 22）：jsdom 依赖链带入的
+  undici 7 在 node 20 上 **import 期即崩**（`util.markAsUncloneable` 不存在，全部测试
+  文件 error、零用例执行）——CI 前端 job 因此从上线起红了三周没人发现（bugfix #51）
 - **测试路径是 `src/**/*.spec.ts`**（co-located，与源文件同目录）
 - **组件测试用真 Pinia**（`createPinia()` + `setActivePinia()`），不装 `@pinia/testing`；
   Element Plus 用 `global.plugins` 挂上，`ResizeObserver` / `matchMedia` 的兜底在 `src/test/setup.ts`

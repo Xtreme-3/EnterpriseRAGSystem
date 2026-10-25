@@ -28,7 +28,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # ⚠️ 必须与 package.json 的 engines 一致。node 20 上 jsdom 依赖链的
+          # undici 7 会在 import 期崩（util.markAsUncloneable 不存在，
+          # 11 个测试文件全 error、零用例执行）——CI 前端 job 自 10-06 上线起
+          # 一直红着没人发现，根因即此（bugfix-log #51）。
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: 安装依赖

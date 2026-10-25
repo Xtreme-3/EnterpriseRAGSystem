@@ -1509,3 +1509,37 @@ libGL / libxcb / libglib 运行时库，slim 基础镜像没有。容器内
    都是功能不可用，但修法完全不同；不区分时错误提示会把人带向错误的修复路径。
 3. 验证交付功能必须走它的**真实触发路径**（这里是扫描件上传），通用冒烟
    （文本上传）覆盖不到冷路径。
+
+---
+
+## 51. 🔴 CI 前端 job 自上线起**从未绿过** —— node 20 上 undici 7 import 即崩，而无人盯首次运行
+
+**症状**：GitHub Actions 的 frontend job 从 2026-10-06（K10「CI 上线」）起每一轮都是
+failure，backend job 正常。本地 `npm test` 始终 74/74 全绿，问题被完全掩盖——直到
+push 后检查 Actions 列表才发现连续 6+ 个 commit 全红。
+
+**根因**：CI `node-version: 20`，而 lockfile 里 jsdom 的依赖链带入了 undici 7
+（`jsdom ^30 → undici ^7`）。undici 7 的 `CacheStorage` 构造调用
+`require('node:util').markAsUncloneable` —— 这个 API **node 20 全系没有**（22.x 起
+才存在；实测 v20.20.2 缺、v22 有）。于是 jsdom 在 import 期直接 TypeError：
+`webidl.util.markAsUncloneable is not a function`，**11 个测试文件全部 error、
+零用例执行**。本地开发机是 node 22.20，所以怎么跑都绿。
+
+**定位过程（本地无法复现时的收窄法）**：CI=true / TZ=UTC / 大小写敏感文件系统 /
+npm ci 全新安装逐项排除后，用 `node:20` 容器复刻 CI 环境（linux + npm ci）当场崩、
+同法 `node:22` 容器 74/74 全绿——一锤定音。教训：**「本地绿」与「CI 绿」之间隔着
+运行时版本，CI 环境本身也是需要测试的被测对象。**
+
+**修复**：
+
+- `ci.yml` node-version 20 → **22**（node 20 已于 2026-04 EOL，正确动作是升版本而不是
+  把 undici 钉回 v6 —— 后者是让全仓库迁就一个死版本）；
+- `frontend/package.json` 加 `engines.node >= 22`，把约束显式写进包元数据，
+  低版本 node 上 `npm ci` 会直接警告而不是留到运行期崩。
+
+**教训**：
+
+1. **CI 上线那天必须盯完第一次真实运行的结果**，绿了才算「上线完成」——只把 workflow
+   文件合进 main 不叫上线。这个 job 红了三周，恰好说明没人看它。
+2. 前端 lockfile 里 `jsdom → undici` 这类**传递依赖悄悄升级**会把隐性的 node 版本
+   下限抬上去；`engines` 字段是把这条隐式约束显式化的唯一位置。
