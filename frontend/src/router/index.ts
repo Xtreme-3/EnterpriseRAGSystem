@@ -66,6 +66,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/QaLogs.vue"),
       },
       {
+        // L2 审计日志：全站第一个非 KB 作用域页面，仅 admin（守卫挡误入，后端 403 挡越权）
+        path: "audit",
+        name: "AuditLogs",
+        component: () => import("@/views/AuditLogs.vue"),
+        meta: { requiresAdmin: true },
+      },
+      {
         path: ":pathMatch(.*)*",
         name: "NotFound",
         component: () => import("@/views/NotFound.vue"),
@@ -88,6 +95,9 @@ router.beforeEach((to, _from, next) => {
 
   if (to.matched.some((r) => r.meta.requiresAuth) && !auth.isLoggedIn) {
     next("/login");
+  } else if (to.matched.some((r) => r.meta.requiresAdmin) && !auth.isAdmin) {
+    // 非 admin 访问 admin 页面：回知识库列表（后端 403 是越权防线，这里挡误入）
+    next("/kbs");
   } else if (to.meta.guest && auth.isLoggedIn) {
     next("/kbs");
   } else {

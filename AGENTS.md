@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（473 用例）；前端 vitest + jsdom + @vue/test-utils（63 用例）
+- **测试**：后端 pytest + httpx + TestClient（482 用例）；前端 vitest + jsdom + @vue/test-utils（74 用例）
 
 ## 目录结构
 
@@ -25,7 +25,7 @@ app/
 ├── storage/
 │   ├── db.py            # init_db、get_db 会话
 │   └── vector_store.py  # VectorStore 抽象（chroma / pgvector 双实现）
-├── api/                 # auth / kbs / documents / chat /
+├── api/                 # auth / audit-logs / kbs / documents / chat /
 │                        # inspect / diagnostics / qa-logs / doc-health
 ├── ingestion/           # parsers 解析、chunker 切片、pipeline 编排
 ├── providers/           # LLM / Embedding / Rerank 三套供应商抽象
@@ -278,7 +278,7 @@ kb_2 刻意**混用三种格式**（1 docx + 1 md + 1 pdf）—— 它照出过 
   `upload_raw`（只发请求，用于断言 202/pending）、`upload_and_wait`（返回文档 JSON，严格断言 202）、
   `upload_and_wait_response`（返回终态 GET 响应；**非 202 原样透传**）。
   别再各自写 `_upload()` 本地封装 —— 已经因为漏改断言连炸过两轮
-- **前端**：`cd frontend && npm test`（vitest + jsdom，63 用例）。约定见上文「前端测试（K9）」
+- **前端**：`cd frontend && npm test`（vitest + jsdom，74 用例）。约定见上文「前端测试（K9）」
 - **junit 输出必须落到仓库内**（如 `.pytest-tmp/junit.xml`）：`/tmp` 在 Git Bash 与 Windows Python
   下不是同一个路径（实际落到 `D:\tmp`），写在 `/tmp` 会找不到文件
 - **看结果以 junit XML 的计数为准**：根节点是 `<testsuites>` 包装，`root.get('tests')` 返回 `None`，
@@ -363,9 +363,23 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 答案反馈闭环 K5（有用/没用 + 原因标签 + `message_feedback` 表 + done 事件带 message_id） | ✅ |
 | 问答缓存 K6（精确 + 语义两级，阈值实测 0.78，kb 级失效，多轮不缓存） | ✅ |
 | K4 摄取异步化（202→pending + `IngestionJob` 进度表 + `POST /documents/{id}/retry`） | ✅ |
+| L1 双阈值拒答（`answer_threshold` 0.48 + 关键词覆盖度 <2 → 零 LLM 成本拒答，仅 hybrid） | ✅ |
+| L2 审计日志（`audit_logs` append-only + 11 写点挂钩 + `GET /api/audit-logs` admin-only + 审计页） | ✅ |
 
-**后端 473 测试全绿**（360 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 63 测试全绿**。
+**后端 482 测试全绿**（369 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 74 测试全绿**。
 跳过的那 113 项**并非无用**：它们是 pgvector 路径的唯一覆盖，本地起 PG 后按上文「测试」节的
 三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，本轮实测 94 passed。
-**阶段六已排期（2026-10-07，见 `docs/roadmap.md`）**：L1 双阈值拒答 → L2 审计日志 → L3 扫描件 OCR（RapidOCR）。
+**阶段六进行中（见 `docs/roadmap.md`）**：L1 双阈值拒答 ✅ → L2 审计日志 ✅ → L3 扫描件 OCR（RapidOCR）⬜。
 未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、PPT、RPA 集成）。
+
+### 审计日志（L2，改写操作路由前必读）
+
+- **记账入口按路径二分**（`app/core/audit.py`，教训见 bugfix #49）：成功路径用
+  `record_audit(db, ...)` 写**请求会话**（与业务同事务）；失败路径（401 登录失败）用
+  `record_audit_detached(request, ...)` 走**独立短会话**（请求会话 rollback 吞不掉它）。
+  **不要把 detached 用到「请求会话已 flush」的路径** —— SQLite 下必撞 `database is locked`
+- **新增写点必须挂钩**：`record_audit(db, ACTIONS.X, actor=..., kb_id=..., target=...)`，
+  action 常量与前端 `AuditLogs.vue` 的中文映射表是两处维护（漏改只降级显示原文）
+- **审计表不设 FK、不级联**（`kb_id`/`actor_id` 是裸 Integer）—— 删库不能带走它自己的删除记录；
+  新增审计字段同样走「独立成表/缺列则 ALTER」的约定
+- 查询接口 `GET /api/audit-logs` 仅 admin（`deps.require_admin`），本仓第一个全局（非 KB 作用域）接口

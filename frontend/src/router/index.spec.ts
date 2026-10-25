@@ -42,4 +42,21 @@ describe("router 路由守卫", () => {
     const login = router.resolve("/login");
     expect(login.meta.guest).toBe(true);
   });
+
+  // L2 审计日志：全站第一个 admin 页面。守卫挡误入，后端 403 挡越权（两道独立的门）。
+  it("/audit 带 requiresAdmin 标记", () => {
+    expect(router.resolve("/audit").matched.some((r) => r.meta.requiresAdmin)).toBe(true);
+  });
+
+  it("非 admin 访问 /audit 时重定向 /kbs", async () => {
+    useAuthStore().setAuth("tok", "bob", "user");
+    await router.push("/audit").catch(() => undefined);
+    expect(router.currentRoute.value.path).toBe("/kbs");
+  });
+
+  it("admin 访问 /audit 时放行", async () => {
+    useAuthStore().setAuth("tok", "root", "admin");
+    await router.push("/audit").catch(() => undefined);
+    expect(router.currentRoute.value.path).toBe("/audit");
+  });
 });

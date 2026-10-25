@@ -4,7 +4,7 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **后端 473 + 前端 63** 个测试用例全绿 · **35** 个 API 端点 · **11** 个前端页面 · **6** 种文档格式 · 全链路可离线运行
+> **后端 482 + 前端 74** 个测试用例全绿 · **36** 个 API 端点 · **12** 个前端页面 · **6** 种文档格式 · 全链路可离线运行
 
 [![CI](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml/badge.svg)](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml)
 
@@ -116,7 +116,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **473 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **482 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -188,7 +188,7 @@ app/
 └── rag/                 # retriever → reranker → query_rewriter → generator
 frontend/src/            # Vue3 前端，11 个页面
 docs/                    # 架构图 / 37 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 473 个离线单测（mock 供应商，无需网络）
+tests/                   # 482 个离线单测（mock 供应商，无需网络）
 scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测脚本
 ```
 
@@ -216,12 +216,12 @@ scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 473 个用例，全程离线
+python -m pytest tests/ -v --tb=short       # 后端 482 个用例，全程离线
 cd frontend && npm test                     # 前端 63 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
-（当前 `473 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL」的用例。
+（当前 `482 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL」的用例。
 它们并非无用：那是 **pgvector 存储路径的唯一覆盖**，本地起 PG 并按 `AGENTS.md` 的
 `VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` 两条要求即可真跑，本轮实测 **94 passed**。）
 

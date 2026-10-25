@@ -255,6 +255,32 @@ class MessageFeedback(Base):
     )
 
 
+class AuditLog(Base):
+    """审计日志（L2）：一次写操作一条 append-only 记录，供 admin 全局追溯。
+
+    **与 QaLog 的本质区别：不设 FK、不级联删除**。审计是历史事实——删库恰恰是
+    最需要留痕的动作，KB / 用户删除不能带走它们自己的删除记录（QaLog 是
+    「KB 没了日志无意义」语义，随库级联；审计相反）。因此：
+
+    - ``kb_id`` / ``actor_id`` 是裸 Integer（可空、无 ForeignKey），语义靠
+      ``actor_name`` / ``target`` 里的名字在删库删用户后仍可读；
+    - 记账走独立短会话（见 app/core/audit.py::record_audit），不随请求回滚——
+      「登录失败」的 401 会让请求会话 rollback，挂在那条会话上的失败审计会消失；
+    - append-only：模型没有 updated_at，也不提供删除 / 清空接口。
+    """
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)  # 见 audit.ACTIONS
+    actor_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    actor_name: Mapped[str] = mapped_column(String(100), default="")  # 恒填；撞库探测时可记不存在的用户名
+    kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    target: Mapped[str] = mapped_column(String(255), default="")  # 被操作对象，如 document:12(报告.pdf)
+    detail: Mapped[str] = mapped_column(String(500), default="")  # 给人看的短补充，可过滤维度不进这里
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class QueryCache(Base):
     """问答缓存（K6）：kb 内规范化问题 → 答案 + 来源，精确 / 语义两级命中。
 

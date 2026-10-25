@@ -1430,3 +1430,43 @@ CREATE TABLE IF NOT EXISTS vectors (... embedding vector(1024) ...)
 不含 `answer_threshold`，第二轮会直接命中第一轮的缓存 —— 实测踩过：门关那轮 16 问平均
 **23ms**，全部缓存命中，测了个寂寞。
 
+
+---
+
+## 49. 🔴 L2 审计记账「全程独立短会话」在 SQLite 下必然 `database is locked` → 审计静默丢失
+
+**症状**：L2 审计日志 9 个新用例首轮 **5 failed / 4 passed**。显性的一类：`create_kb` /
+`register` / `member.add` 等挂钩在写审计时抛 `sqlalchemy.exc.OperationalError:
+(sqlite3.OperationalError) database is locked`（对 `INSERT INTO audit_logs`）。
+更隐蔽的一类：`test_audit_filters_and_pagination` 不报错，而是
+`assert reg_page["total"] == 3` 拿到 `0 == 3` —— 审计 INSERT 失败被 best-effort
+的 `except` 吞掉，**审计静默消失，业务响应毫无异常**。
+
+**根因**：最初设计「审计一律走独立短会话、立即 commit」，理由是「`get_db` 在路由
+抛异常时会 rollback，挂在请求会话上的 401 失败审计会跟着消失」。这个理由对失败路径
+成立，但把成功路径也照搬就撞上 SQLite 的写锁语义：**成功路径上请求会话已经
+flush（`db.add(kb); db.flush()` 等），写锁一直持有到请求结束 `get_db` 才 commit**；
+此时 `record_audit` 另开第二个会话写同一个 SQLite 文件，等锁到默认超时 → locked。
+而 best-effort 的 `except Exception` 把这一切静默化 —— 设计里的「审计挂了不影响业务」
+变成了「审计挂了没人知道」。
+
+**修复**（会话按路径二分，见 `app/core/audit.py` 模块注释与需求卡决策 ①）：
+
+- **成功路径** → `record_audit(db, ...)`：写入请求会话，与业务**同事务**提交。
+  锁问题消失（全程单会话），语义也更正确：操作成功 ⇔ 留审计，业务回滚审计同亡
+  （没做成的事不留「成功」假象）；
+- **失败路径**（目前仅 401 登录失败）→ `record_audit_detached(request, ...)`：独立
+  短会话立即提交 + best-effort。此路径请求会话只做过 SELECT（无写锁），短会话写入
+  无冲突 —— 401 rollback 吞不掉它。
+
+**顺带抓到的第二个 bug**：为「best-effort」写的专项用例（把 `AuditLog` 构造换成
+必抛替身）暴露 `_build_log()` 调用在 `try` 块**外** —— 构造阶段的编程错误直接把
+登录打成 500，best-effort 名存实亡。构造移进 `try` 后用例转绿（`401` 不变）。
+
+**教训**：
+
+1. 「独立会话更安全」这类架构直觉**要先过一次真实写路径**——两个会话写同一个
+   SQLite 文件的锁语义不在直觉覆盖范围内。与 #48 同一个母题：设计推演 ≠ 实测。
+2. **best-effort 的 `except` 会把「没写进去」变成「静默没写进去」**。凡是吞异常的
+   挂钩，配套测试必须直接断言落库结果（行数 / 内容），不能只断言业务响应 ——
+   `0 == 3` 那条用例就是这样抓住问题的。

@@ -14,6 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_db, get_rag
+from app.core import audit
 from app.core.models import KnowledgeBase, KnowledgeBaseMember, User
 
 logger = logging.getLogger("app.kbs")
@@ -180,6 +181,9 @@ def create_kb(
     )
     db.add(kb)
     db.flush()
+    # 成功路径：审计与业务同事务（请求会话）
+    audit.record_audit(db, audit.ACTIONS.KB_CREATE, actor=current_user,
+                       kb_id=kb.id, target=audit.kb_target(kb.id, kb.name))
     return _to_kb_response(kb, "owner")
 
 
@@ -235,6 +239,11 @@ def delete_kb(
 ) -> dict[str, str]:
     """删除知识库（级联删除文档+切片+向量）。仅 owner 可执行。"""
     kb = _get_user_kb_or_403(db, kb_id, current_user, required="owner")
+
+    # L2：删前记（kb_id 无 FK，删除后记录幸存——删库恰恰是最需要留痕的动作）；
+    # 成功路径与业务同事务
+    audit.record_audit(db, audit.ACTIONS.KB_DELETE, actor=current_user,
+                       kb_id=kb.id, target=audit.kb_target(kb.id, kb.name))
 
     # 删除向量集合（K2：复用启动时装配的向量库，不新建连接）
     try:
@@ -297,6 +306,9 @@ def add_member(
     member = KnowledgeBaseMember(kb_id=kb_id, user_id=target.id, role=req.role)
     db.add(member)
     db.flush()
+    audit.record_audit(db, audit.ACTIONS.MEMBER_ADD, actor=current_user,
+                       kb_id=kb_id, target=audit.user_target(target.id, target.username),
+                       detail=f"role={req.role}")
     return MemberOut(
         user_id=target.id, username=target.username, role=req.role, created_at=member.created_at
     )
@@ -322,8 +334,12 @@ def update_member(
     if member is None:
         raise HTTPException(status_code=404, detail="成员不存在")
     user = db.query(User).filter(User.id == user_id).first()
+    old_role = member.role
     member.role = req.role
     db.flush()
+    audit.record_audit(db, audit.ACTIONS.MEMBER_ROLE_CHANGE, actor=current_user,
+                       kb_id=kb_id, target=audit.user_target(user_id, user.username if user else ""),
+                       detail=f"role={old_role}→{req.role}")
     return MemberOut(
         user_id=user_id, username=user.username if user else f"user_{user_id}",
         role=req.role, created_at=member.created_at,
@@ -348,5 +364,8 @@ def remove_member(
     )
     if member is None:
         raise HTTPException(status_code=404, detail="成员不存在")
+    target = db.query(User).filter(User.id == user_id).first()
+    audit.record_audit(db, audit.ACTIONS.MEMBER_REMOVE, actor=current_user,
+                       kb_id=kb_id, target=audit.user_target(user_id, target.username if target else ""))
     db.delete(member)
     return {"status": "removed"}

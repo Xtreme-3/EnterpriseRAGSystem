@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, get_ingestion, get_rag
 from app.api.kbs import _get_user_kb_or_403
+from app.core import audit
 from app.core.models import Document, IngestionJob, User
 from app.ingestion.parsers import SUPPORTED_EXTS
 
@@ -134,6 +135,9 @@ def upload_document(
 
     # 4. 交给执行器，不等待
     ingest.enqueue(doc.id)
+    # L2：受理即记（不等摄取终态——202 已承诺受理，审计记的就是这次受理）
+    audit.record_audit(db, audit.ACTIONS.DOCUMENT_UPLOAD, actor=current_user,
+                       kb_id=kb_id, target=audit.doc_target(doc.id, doc.filename))
     return _doc_out(doc, job)
 
 
@@ -198,6 +202,8 @@ def retry_document(
 
     ingest.reset_job(doc_id)
     ingest.enqueue(doc_id)
+    audit.record_audit(db, audit.ACTIONS.DOCUMENT_RETRY, actor=current_user,
+                       kb_id=doc.kb_id, target=audit.doc_target(doc.id, doc.filename))
     # reset_job 走的是另一个会话，本会话里的 doc / job 还是旧值 —— 全部作废重读
     db.expire_all()
     return _doc_out(doc, _job_of(db, doc_id))
@@ -240,6 +246,10 @@ def delete_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="文档不存在")
     _get_user_kb_or_403(db, doc.kb_id, current_user, required="editor")
+
+    # L2：删前记（文档元数据即将级联消失，名字只有此刻拿得到）；与业务同事务
+    audit.record_audit(db, audit.ACTIONS.DOCUMENT_DELETE, actor=current_user,
+                       kb_id=doc.kb_id, target=audit.doc_target(doc.id, doc.filename))
 
     # 清理向量 + 元数据 + 上传原件（pipeline 内部处理）
     try:

@@ -166,6 +166,7 @@ def _internal_error_response(request_id: str) -> JSONResponse:
 
 # ---- 挂载业务路由 ----
 from app.api.auth import router as auth_router  # noqa: E402
+from app.api.audit import router as audit_router  # noqa: E402
 from app.api.config import router as config_router  # noqa: E402
 from app.api.kbs import router as kbs_router  # noqa: E402
 from app.api.documents import router as documents_router  # noqa: E402
@@ -176,6 +177,7 @@ from app.api.dashboard import router as dashboard_router  # noqa: E402
 from app.api.doc_health import router as doc_health_router  # noqa: E402
 
 app.include_router(auth_router)
+app.include_router(audit_router)
 app.include_router(config_router)
 app.include_router(kbs_router)
 app.include_router(documents_router)

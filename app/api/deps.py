@@ -90,3 +90,13 @@ def get_current_user(
         logger.warning("令牌有效但用户不存在 path=%s username=%s", request.url.path, username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
     return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """全局 admin 门槛（L2 审计查询是本仓第一个全局接口）。
+
+    前端路由守卫只挡误入，真正的越权防线在这里（直接打 API 必须吃 403）。
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    return current_user

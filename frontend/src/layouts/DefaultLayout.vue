@@ -5,6 +5,8 @@
         <span class="header-logo">EnterpriseRAG</span>
       </div>
       <div class="header-right">
+        <!-- L2：审计日志是全局 admin 入口（本仓无侧边栏，顶栏是唯一常驻导航位） -->
+        <el-button v-if="authStore.isAdmin" text @click="router.push('/audit')">审计日志</el-button>
         <span class="header-user">{{ authStore.username }}</span>
         <!-- I2 RBAC：全局角色徽章（admin）—— 评审 P1-7：权限不是危险状态，
              不用红色实心块（语义色误用 + 高饱和色块违反「彩色面积 <10%」） -->
