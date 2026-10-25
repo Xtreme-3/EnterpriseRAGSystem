@@ -4,7 +4,7 @@
 
 一条提问走完全程：文档上传 → 解析 → 切片 → 向量化 → 检索（向量 + 关键词双路）→ 重排 → 流式生成 → **每条答案都能点回原文**。
 
-> **后端 462 + 前端 63** 个测试用例全绿 · **35** 个 API 端点 · **11** 个前端页面 · **6** 种文档格式 · 全链路可离线运行
+> **后端 473 + 前端 63** 个测试用例全绿 · **35** 个 API 端点 · **11** 个前端页面 · **6** 种文档格式 · 全链路可离线运行
 
 [![CI](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml/badge.svg)](https://github.com/Xtreme-3/EnterpriseRAGSystem/actions/workflows/ci.yml)
 
@@ -116,7 +116,7 @@ cd frontend && npm install && npm run dev        # 前端 http://127.0.0.1:5173
 
 **2. 语义切分要分两档，因为成本差一个量级。** `structure` 档只看文档结构（标题层级、编号条款）决定块边界，纯离线、零 token 成本，对制度/手册类文档效果已经很好；`semantic` 档在此基础上用句级 embedding 找语义断点，适合结构松散的会议纪要。做成可切换而不是只做贵的那个，是因为内网环境下 embedding 调用也是成本。
 
-**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **462 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
+**3. 可降级设计是架构约束，不是补丁。** LLM / Embedding / Rerank 三套供应商各自抽象成接口并有 mock 实现，于是 **473 个后端测试用例全程不联网、不需要密钥**，`demo.py` 在任何一台干净机器上都能跑通。这条约束反过来逼出了更好的代码结构——供应商层与业务逻辑彻底解耦。
 
 ## 六、快速开始
 
@@ -186,9 +186,9 @@ app/
 ├── ingestion/           # parsers 解析、chunker 切片、pipeline 编排
 ├── providers/           # LLM / Embedding / Rerank 三套供应商抽象
 └── rag/                 # retriever → reranker → query_rewriter → generator
-frontend/src/            # Vue3 前端，10 个页面
-docs/                    # 架构图 / 30 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
-tests/                   # 462 个离线单测（mock 供应商，无需网络）
+frontend/src/            # Vue3 前端，11 个页面
+docs/                    # 架构图 / 37 张需求卡片 / 进度日志 / 踩坑日志 / 路线图
+tests/                   # 473 个离线单测（mock 供应商，无需网络）
 scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测脚本
 ```
 
@@ -216,12 +216,12 @@ scripts/                 # 语料生成 / 重新摄取 / 阈值探针 / 评测�
 ## 九、测试
 
 ```bash
-python -m pytest tests/ -v --tb=short       # 后端 462 个用例，全程离线
+python -m pytest tests/ -v --tb=short       # 后端 473 个用例，全程离线
 cd frontend && npm test                     # 前端 63 个用例（vitest + jsdom）
 ```
 
 后端测试 fixture 钉死 ChromaDB，不需要 PostgreSQL 就能全量跑；pgvector 相关用例单独标记，连不上时自动跳过。
-（当前 `462 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL」的用例。
+（当前 `473 collected / 0 failed / 0 errors / 113 skipped` —— 跳过的全是「需要 PostgreSQL」的用例。
 它们并非无用：那是 **pgvector 存储路径的唯一覆盖**，本地起 PG 并按 `AGENTS.md` 的
 `VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` 两条要求即可真跑，本轮实测 **94 passed**。）
 
@@ -270,7 +270,7 @@ K 系列 10 块，其中 K0–K4、K8、K9 已开需求卡片，**K0–K4、K5�
 - [开发路线图](docs/roadmap.md) —— 全部积木与完成状态
 - [进度日志](docs/progress-log.md) —— 每个积木的实现记录
 - [踩坑日志](docs/bugfix-log.md) —— 47 条按严重度分级的真实问题与修法
-- [需求卡片](docs/requirements/) —— 36 张，动工前先写、完成后验收
+- [需求卡片](docs/requirements/) —— 37 张，动工前先写、完成后验收
 - [前端去 AI 味设计指令](docs/design-guide.md) —— 禁紫蓝渐变、品牌色 5-10%、圆角分层等硬规则
 - [前端落地方案](docs/design-manifest.md) —— 按本项目 10 个页面的实际形态定制，逐页改什么 + 落地顺序
 - [AGENTS.md](AGENTS.md) —— 给 AI 编码助手看的项目上下文

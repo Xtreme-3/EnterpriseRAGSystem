@@ -12,7 +12,7 @@
 - **模型**：阿里云百炼官方 / 智谱 GLM / 第三方中转站（`dashscope` 槽位）/ mock（离线可测），
   OpenAI 兼容接口；LLM / Embedding / Rerank **三插槽可分别指向不同供应商**
 - **鉴权**：bcrypt + JWT（python-jose, HS256）
-- **测试**：后端 pytest + httpx + TestClient（462 用例）；前端 vitest + jsdom + @vue/test-utils（63 用例）
+- **测试**：后端 pytest + httpx + TestClient（473 用例）；前端 vitest + jsdom + @vue/test-utils（63 用例）
 
 ## 目录结构
 
@@ -364,7 +364,8 @@ python scripts/demo.py         # 离线冒烟（mock 供应商）
 | 问答缓存 K6（精确 + 语义两级，阈值实测 0.78，kb 级失效，多轮不缓存） | ✅ |
 | K4 摄取异步化（202→pending + `IngestionJob` 进度表 + `POST /documents/{id}/retry`） | ✅ |
 
-**后端 462 测试全绿**（349 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 63 测试全绿**。
+**后端 473 测试全绿**（360 通过 / 113 跳过，跳过项需 PostgreSQL）+ **前端 63 测试全绿**。
 跳过的那 113 项**并非无用**：它们是 pgvector 路径的唯一覆盖，本地起 PG 后按上文「测试」节的
 三条要求（`VECTOR_STORE=pgvector` + 隔离 `DATA_DIR` + 维度变更先 DROP 表）可以真跑，本轮实测 94 passed。
-未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、审计日志、更多格式（PPT/OCR，Excel 已完成 → K10）、RPA 集成）。
+**阶段六已排期（2026-10-07，见 `docs/roadmap.md`）**：L1 双阈值拒答 → L2 审计日志 → L3 扫描件 OCR（RapidOCR）。
+未排期项见 `docs/roadmap.md` 末尾（管理后台、向量库可插拔、多模型配置、PPT、RPA 集成）。

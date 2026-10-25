@@ -118,6 +118,23 @@ class Settings(BaseSettings):
     #   `python scripts/measure_similarity_margin.py --kb 2 --questions-file docs/eval/questions-kb2.json`
     #   （退出码 1 = 当前阈值不落在间隙内）
     similarity_threshold: float = 0.40
+    # L1 双阈值拒答的「强相关线」：0.40 只负责把最弱的噪声挡在召回外，但 kb_2 实测
+    # 库外噪声会**高于粗筛线**（最高 0.4727）照样进 prompt，拒答全靠 LLM 自觉
+    # （换更弱的模型可能失守）。本阈值与之配合构成**组合证据门**（只在 hybrid 模式生效）：
+    #   向量候选 raw 余弦**最高的一条** < answer_threshold
+    #   且 关键词路证据不足（lexical_overlap < LEXICAL_EVIDENCE_MIN_OVERLAP）
+    #   → 判定为库外，直接返回标准拒答，不再调 LLM。
+    # 实测依据（2026-10-07，scripts/measure_refusal_gate.py，生产配置口径复测）：
+    #   ⚠️ 门用的统计量是**各问的 max**（「有没有强相关切片」），**不是**「库内 rank-5
+    #   最低」—— 那是 measure_similarity_margin.py 的口径，两个数不能互相引用。
+    #   kb_1 库外 max 最高 0.3750（低于粗筛线 → 门根本不参与，走空检索拒答的老路径）；
+    #   kb_2 库外 max 最高 0.4727 / 库内 max 最低 0.7536 → **干净间隙**。
+    #   0.48 落在 (0.4727, 0.6580) 内：kb_2 噪声被门拦下，两库库内一条不伤
+    #   （kb_1 库内 max 最低 0.6580）。下界是紧的一侧，语料变差时先破它。
+    # ⚠️ 与 similarity_threshold 同一纪律：换语料、加文档或换 embedding 后必须随
+    #   scripts/measure_refusal_gate.py 重测（退出码 1 = 误杀，2 = 门形同虚设）。
+    # 置 0 = 关闭该门，行为完全回退到「拒答全靠模型」。
+    answer_threshold: float = 0.48
     vector_store: str = "chroma"  # chroma | pgvector
     # 检索模式：vector（纯向量）/ hybrid（向量 + 关键词全文融合，默认）。H1 混合检索
     retrieval_mode: str = "hybrid"

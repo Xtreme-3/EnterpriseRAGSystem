@@ -52,6 +52,33 @@ def tokenize(text: str) -> list[str]:
     return out
 
 
+# L1 双阈值拒答门：判定「关键词路是否提供了实质证据」的覆盖度门槛。
+# **不能用关键词路的 score** —— chroma 的词分是「命中词数」（整数）、pgvector 是
+# ts_rank（浮点），两者量纲不通，任何字面阈值都会在换存储时静默失准。因此改用
+# 「命中切片正文实际覆盖了几个查询词」这个两存储都有的无量纲口径。
+# 实测（2026-10-07，双库 29 问，scripts/measure_refusal_gate.py）：
+#   库外探针最多覆盖 1 个词（「美国站的退货窗口是多少天？」只命中「美国」），
+#   库内问题最少覆盖 2 个 → 门槛取 2 恰好分离。
+# ⚠️ 与 similarity_threshold / answer_threshold 同一纪律：换语料、加文档或换分词后
+#   必须随 scripts/measure_refusal_gate.py 重跑（退出码 1 = 出现误杀）。
+LEXICAL_EVIDENCE_MIN_OVERLAP = 2
+
+
+def lexical_overlap(query: str, hits: list[ScoredChunk]) -> int:
+    """关键词路「证据强度」：命中的切片里，最多覆盖了几个不同的查询词。
+
+    返回 0 表示关键词路没提供实质证据（无命中，或只碰上「的/是」这类高频 2-gram）。
+    见上方 ``LEXICAL_EVIDENCE_MIN_OVERLAP`` 说明，刻意不使用 ``hits`` 的 score。
+    """
+    terms = set(tokenize(query))
+    if not terms:
+        return 0
+    return max(
+        (sum(1 for t in terms if t in h.content.lower()) for h in hits),
+        default=0,
+    )
+
+
 def fuse_hybrid(
     vector_hits: list[ScoredChunk],
     lexical_hits: list[ScoredChunk],

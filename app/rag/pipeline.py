@@ -111,7 +111,12 @@ class RagPipeline:
             return cached
         # 检索用改写问句（消解指代），生成用原始问句（保留用户原意）
         search_query = self.rewriter.rewrite(query, history)
-        hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
+        hits, refuse = self.retriever.retrieve_gated(kb_id, search_query, k, mode=mode)
+        if refuse:
+            # L1 双阈值门：向量候选全弱 + 关键词 0 命中 → 库外，直接走「检索为空」路径
+            # （Generator 对空 hits 不调 LLM、给 NO_HIT_ANSWER），不新增生成侧分支。
+            self._log_refusal_gate(kb_id, search_query)
+            hits = []
         hits = self._maybe_rerank(search_query, hits, k, rerank)
         # K3：文档名必须在**生成之前**解析好——prompt 里要写出「（来源：xxx.pdf · 第 N 块）」，
         # 模型才能引用具体文档。同一份映射顺带用于来源展示，全程只查一次库。
@@ -190,7 +195,12 @@ class RagPipeline:
         search_query = self.rewriter.rewrite(query, history)
 
         yield {"type": "stage", "stage": "retrieving"}
-        hits = self.retriever.retrieve(kb_id, search_query, k, mode=mode)
+        hits, refuse = self.retriever.retrieve_gated(kb_id, search_query, k, mode=mode)
+        if refuse:
+            # L1 双阈值门（语义与 ask() 完全一致）；此时 sources 事件尚未发出，
+            # 置空 hits 走既有路径，天然满足「sources 先于 token」的契约。
+            self._log_refusal_gate(kb_id, search_query)
+            hits = []
 
         yield {"type": "stage", "stage": "reranking"}
         hits = self._maybe_rerank(search_query, hits, k, rerank)
@@ -239,6 +249,19 @@ class RagPipeline:
                 "答案引用了不存在的来源编号 kb_id=%s 越界编号=%s 实际来源数=%s",
                 kb_id, issues, source_count,
             )
+
+    @staticmethod
+    def _log_refusal_gate(kb_id: int, search_query: str) -> None:
+        """L1 双阈值门触发 = 向量候选全弱 + 关键词 0 命中，判定为库外直接拒答。
+
+        与「零命中」同一约定：INFO 下静默（每个库外问题都会走到，打 INFO 会淹掉
+        正常日志），排查「为什么拒答了 / 为什么没调模型」时开 DEBUG 可见。
+        """
+        logger.debug(
+            "双阈值拒答门触发：向量候选全低于 answer_threshold 且关键词 0 命中，"
+            "跳过 LLM 直接拒答 kb_id=%s query=%s",
+            kb_id, search_query,
+        )
 
     def _maybe_rerank(
         self, query: str, hits: list[ScoredChunk], k: int, rerank: bool | None
